@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subcontract OS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<aside class="side">
+  <div class="brand"><span class="mark">S</span><div><b>Subcontract OS</b><small>MVP · contract-to-evidence</small></div></div>
+  <nav id="nav">
+    <a data-view="dashboard" class="on">Portfolio control</a>
+    <a data-view="registry">Registry</a>
+    <a data-view="subcontracts">Subcontracts &amp; flow-down</a>
+    <a data-view="documents">Documents</a>
+    <a data-view="review">Review queue</a>
+    <a data-view="obligations">Obligations &amp; evidence</a>
+    <a data-view="knowledge">Knowledge query</a>
+    <a data-view="audit">Audit trail</a>
+  </nav>
+  <div class="side-foot">Demo data is fictional.<br>Auth is a dev stub (X-User).</div>
+</aside>
+<main>
+  <header class="top">
+    <div class="ctx">
+      <label>Project <select id="project"></select></label>
+      <label>Acting as <select id="user"></select></label>
+    </div>
+    <div id="whoami" class="who"></div>
+  </header>
+  <section id="view"></section>
+</main>
+<div id="toast"></div>
+<div id="modal" class="modal hidden"><div class="modal-card"><button class="x" onclick="closeModal()">×</button><div id="modal-body"></div></div></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+# Acceptance-test traceability (blueprint Section 14 → `tests/test_acceptance.py`)
+
+| Blueprint ID | Requirement | Test | Status |
+|---|---|---|---|
+| REG-01 | Duplicate legal entity detected | `test_REG01_duplicate_legal_entity_detected` | ✅ |
+| REG-02 | One identity, separate project relationships | `test_REG02_one_identity_two_projects_separate_visibility` | ✅ |
+| CON-01 | Cross-project main contract rejected (API + DB composite FK) | `test_CON01_*` (2) | ✅ |
+| CON-02 | Formal subcontract needs a main contract | `test_CON02_*` | ✅ |
+| CON-03 | Executed baseline immutable | `test_CON03_*` | ✅ |
+| CON-04 | Superseded revision retained and retrievable | `test_CON04_*` | ✅ |
+| DOC-01 | Same file twice → duplicate, no new records | `test_DOC01_*` | ✅ |
+| DOC-02 | Scans/PDF locators (MVP: page locators for text PDFs; OCR is next) | `test_DOC02_*` | ✅ partial |
+| DOC-03 | BOQ cell provenance and formulas | `test_DOC03_*` | ✅ |
+| DOC-04 | Conflicting revision label not guessed | `test_DOC04_*` | ✅ |
+| DOC-05 | Unsafe / malformed files quarantined | `test_DOC05_*` | ✅ |
+| DOC-06 | Interrupted job retries without duplicates | `test_DOC06_*` | ✅ |
+| DOC-07 | New parser version versioned, approved records kept | `test_DOC07_*` | ✅ |
+| CI-01 | Obligation links to exact revision and passage | `test_CI01_*` | ✅ |
+| CI-02 | Governing version used; history on request | `test_CI02_*` | ✅ |
+| CI-03 | Conflicts surfaced with both sources | `test_CI03_*` | ✅ |
+| CI-04 | Every in-scope clause has a disposition row | `test_CI04_*` | ✅ |
+| CI-05 | Release blocked; exception only by a separate approver | `test_CI05_*` | ✅ |
+| CI-06 | Insufficient evidence reported | `test_CI06_*` | ✅ |
+| CI-07 | Revoked access denies search and download | `test_CI07_*` | ✅ |
+| CI-08 | Embedded instructions treated as data | `test_CI08_*` | ✅ |
+| SEC-01 | Cross-project retrieval denied | `test_SEC01_*` | ✅ |
+| — | Classification above clearance hidden | `test_SEC02_*` | ✅ |
+| WF-01 | Invalid lifecycle transition rejected | `test_WF01_*` | ✅ |
+| PAY-03 (pattern) | Segregation of duties (release approval, risk exception, evidence, amendments) | `test_SOD01_*`, `test_CI05_*`, `test_VS01_*` | ✅ |
+| PAY-02 (pattern) | Idempotency keys; same key + different payload rejected | `test_IDEM01_*`, `test_IDEM02_*` | ✅ |
+| AUD-01 | Amendment retains actor, time, reason, old/new | `test_AUD01_*` | ✅ |
+| Vertical slice | Source → flow-down → approval → obligation → evidence (reject, then accept) → trace | `test_VS01_*` | ✅ |
+| WF-02/03, VAR-01/02, PAY-01 | Mobilisation, variations, payments | — | Phase 4–5 (not in MVP) |
+| REC-01 | Restore drill | — | Requires the pilot environment |
