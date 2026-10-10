@@ -164,7 +164,7 @@ class FlowdownMapping(Base):
     source_clause_id: Mapped[str] = mapped_column(ForeignKey("contracts_clauses.id"))
     proposed_disposition: Mapped[str] = mapped_column(String(40))     # machine proposal
     proposed_rationale: Mapped[str] = mapped_column(Text)
-    proposal_method: Mapped[str] = mapped_column(String(60), default="rules-v1")
+    proposal_method: Mapped[str] = mapped_column(String(200), default="rules-v1")
     disposition: Mapped[str | None] = mapped_column(String(40), nullable=True)  # human decision
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     subcontract_treatment: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -317,3 +317,47 @@ class IdempotencyRecord(Base):
     request_hash: Mapped[str] = mapped_column(String(64))
     response: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+# ---------------------------------------------------------------- AI layer (LLM-agnostic)
+class LLMProvider(Base):
+    """An administrator-registered model endpoint. Any provider; the core never depends on one."""
+    __tablename__ = "knowledge_llm_providers"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    provider_type: Mapped[str] = mapped_column(String(40))          # key into app.llm.catalogue.CATALOGUE
+    base_url: Mapped[str] = mapped_column(String(500))
+    model: Mapped[str] = mapped_column(String(200))
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    api_key_env: Mapped[str | None] = mapped_column(String(100), nullable=True)   # preferred in production
+    key_hint: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    data_zone: Mapped[str] = mapped_column(String(10), default="CLOUD")            # PRIVATE | CLOUD
+    temperature: Mapped[float] = mapped_column(Numeric(3, 2), default=0)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=800)
+    timeout_s: Mapped[int] = mapped_column(Integer, default=60)
+    extra: Mapped[dict] = mapped_column(JSON, default=dict)          # api_version, extra headers ...
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class AppSetting(Base):
+    __tablename__ = "identity_app_settings"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
+
+
+class LLMCall(Base):
+    """Metadata of every model call. Prompt and response content are never logged."""
+    __tablename__ = "audit_llm_calls"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    provider_id: Mapped[str] = mapped_column(String(36))
+    provider_name: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(200))
+    purpose: Mapped[str] = mapped_column(String(40))
+    ok: Mapped[bool] = mapped_column(Boolean)
+    latency_ms: Mapped[int] = mapped_column(Integer)
+    prompt_chars: Mapped[int] = mapped_column(Integer)
+    response_chars: Mapped[int] = mapped_column(Integer, default=0)
+    outcome: Mapped[str] = mapped_column(String(300), default="")

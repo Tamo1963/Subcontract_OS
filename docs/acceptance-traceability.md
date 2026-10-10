@@ -30,5 +30,11 @@
 | PAY-02 (pattern) | Idempotency keys; same key + different payload rejected | `test_IDEM01_*`, `test_IDEM02_*` | ✅ |
 | AUD-01 | Amendment retains actor, time, reason, old/new | `test_AUD01_*` | ✅ |
 | Vertical slice | Source → flow-down → approval → obligation → evidence (reject, then accept) → trace | `test_VS01_*` | ✅ |
+| AI-01 | Provider chosen from dropdown catalogue; any endpoint | `test_catalogue_*`, `test_each_protocol_*` (6) | ✅ |
+| AI-02 | Keys write-only and encrypted; admin-only configuration | `test_only_admin_registers_*`, `test_endpoint_validation` | ✅ |
+| AI-03 | Model output is a proposal; invalid output or outage falls back to rules | `test_flowdown_uses_assigned_model_*`, `test_invalid_model_output_*`, `test_unreachable_provider_*` | ✅ |
+| AI-04 | RESTRICTED content never sent to CLOUD providers | `test_restricted_content_never_sent_*` | ✅ |
+| AI-05 | Model-drafted answers only cite retrieved sources | `test_knowledge_draft_is_citation_checked` | ✅ |
+| AI-06 | Call log holds metadata, not content | `test_call_log_holds_metadata_not_content` | ✅ |
 | WF-02/03, VAR-01/02, PAY-01 | Mobilisation, variations, payments | — | Phase 4–5 (not in MVP) |
 | REC-01 | Restore drill | — | Requires the pilot environment |

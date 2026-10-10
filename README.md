@@ -39,8 +39,22 @@ Main-contract document → source clause → proposed flow-down → human decisi
 | Governance | Append-only audit trail, typed errors, idempotency keys | §9.3, §10 |
 | Dashboard | Portfolio control: unresolved flow-downs, overdue / upcoming obligations, review queue, drill-down | Blueprint §11 |
 
+### LLM-agnostic AI layer
+
+Any model can be plugged in from **AI providers** (system administrator): pick a provider from the dropdown
+(OpenAI, Anthropic, Azure OpenAI, Gemini, Mistral, Groq, DeepSeek, OpenRouter, Together, LiteLLM gateway,
+Ollama, vLLM/TGI, LM Studio or any OpenAI-compatible endpoint), enter its endpoint, model and key, test the
+connection, and assign it to **flow-down proposals** and/or **knowledge answers**. Keys are encrypted and never
+shown again; RESTRICTED content never leaves for a CLOUD-zone provider; model output is validated and remains a
+proposal; any failure falls back to the built-in rules. See [ADR-0002](docs/adr/0002-llm-agnostic-ai-layer.md).
+
+![AI providers](docs/screenshots/E_ai_providers.png)
+
+To try it without keys: `uvicorn seed.mock_llm:app --port 8099`, then register *vLLM / TGI* with
+endpoint `http://localhost:8099/v1` and any model name.
+
 Not in the MVP: mobilisation, field, QA/HSE registers, variations and payments (Phases 4–5), OCR for scans,
-semantic (pgvector) retrieval, model-backed agents, the enterprise identity provider, and PostgreSQL/Alembic.
+semantic (pgvector) retrieval, the enterprise identity provider, and PostgreSQL/Alembic.
 See [ADR-0001](docs/adr/0001-mvp-baseline.md).
 
 ## Run it
@@ -71,7 +85,7 @@ Use **Acting as** in the top bar to switch users and see the permissions change:
 ## Tests
 
 ```bash
-python -m pytest -q        # 33 acceptance tests mapped to blueprint IDs
+python -m pytest -q        # 50 tests: blueprint acceptance IDs + LLM-agnostic layer
 ```
 
 See [docs/acceptance-traceability.md](docs/acceptance-traceability.md).
@@ -83,7 +97,8 @@ app/
   models.py            authoritative relational model (logical schemas as table prefixes)
   security.py          roles, project scope, classification
   audit.py             append-only ledger, idempotency
-  services/            ingestion · flowdown (AI seam: FlowdownProposer) · lifecycle · knowledge
+  services/            ingestion · flowdown · lifecycle · knowledge
+  llm/                 provider catalogue · gateway (5 protocols) · key encryption
   routers/             registry · contracts · documents · obligations · insight
   web/                 internal workspace (vanilla JS, no build)
 seed/                  sample document generator and API-driven demo loader
@@ -95,7 +110,7 @@ docs/                  blueprint, ADRs, traceability
 
 1. Confirm the ADR-0001 decisions; move to PostgreSQL + Alembic; replace the auth stub with SSO/MFA.
 2. OCR for scanned contracts; email and batch intake; background worker for processing jobs.
-3. pgvector semantic stage and a model-backed `FlowdownProposer`, evaluated against the labelled set.
+3. pgvector semantic stage; evaluate registered models against the labelled set before assignment.
 4. Phase 4–5 modules: mobilisation and enablers, field/QA/HSE, variations, measurement and payment.
 
 Licensed under GPL-3.0 (see `LICENSE`).

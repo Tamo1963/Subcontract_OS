@@ -15,4 +15,4 @@ The five decisions in blueprint Section 16 were not selected, so the MVP was bui
 ## Consequences
 - SQLite is used for the MVP; the model maps 1:1 to PostgreSQL schemas (`registry_*` → `registry.*`). Move to PostgreSQL + Alembic migrations before pilot data.
 - Authentication is a development stub (`X-User` header). It must be replaced by the enterprise IdP with MFA before any real use. Authorisation itself (roles, project scope, classification, segregation of duties) is real and tested.
-- The AI seam is `FlowdownProposer` (rules-based `rules-v1` today) and the lexical retrieval stage. A model-backed proposer and a pgvector stage plug in behind the same interfaces; outputs stay proposals.
+- The AI layer is LLM-agnostic (see ADR-0002). A pgvector semantic stage plugs into retrieval later; model outputs stay proposals.

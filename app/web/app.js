@@ -46,7 +46,7 @@ function go(view, extra = {}) { Object.assign(S, extra); S.view = view;
   document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === view)); render(); }
 async function render() {
   const v = $("#view");
-  if (!S.project) { v.innerHTML = `<h1>No project access</h1><p class="sub">This user is not a member of any project. Access is enforced by the API, not the UI.</p>`; return; }
+  if (!S.project && S.view !== "ai") { v.innerHTML = `<h1>No project access</h1><p class="sub">This user is not a member of any project. Access is enforced by the API, not the UI.</p>`; return; }
   v.innerHTML = `<p class="muted">Loading…</p>`;
   try { v.innerHTML = await VIEWS[S.view](); bindView(); }
   catch (e) { v.innerHTML = `<div class="card"><h2>Not available</h2><p class="muted">${esc(e.code || "")} ${esc(e.message || e)}</p></div>`; }
@@ -247,15 +247,16 @@ VIEWS.knowledge = async () => {
   return `<h1>Knowledge query</h1><p class="sub">Evidence-grounded retrieval over governing revisions you are authorised to read. Answers quote sources and never invent clause references.</p>
   <div class="card"><div class="row"><input id="kq" style="flex:1" placeholder="e.g. What notice period applies to delay events?" value="What notice period applies to delay events?">
     <select id="ksub"><option value="">All project documents</option>${p.subcontracts.map(s => `<option value="${s.id}">${esc(s.subcontract_number)}</option>`).join("")}</select>
-    <label class="small"><input type="checkbox" id="ksup"> include superseded</label><button class="primary" id="kgo">Ask</button></div>
+    <label class="small"><input type="checkbox" id="ksup"> include superseded</label><label class="small"><input type="checkbox" id="kllm"> draft answer with assigned model</label><button class="primary" id="kgo">Ask</button></div>
     <div class="row small muted" style="margin-top:8px">Try: ${["What does clause 9.2 say?", "What is the rate of liquidated damages?", "Retention release", "Who won the cricket world cup?"].map(x => `<a href="#" data-try="${esc(x)}">${esc(x)}</a>`).join(" · ")}</div></div>
   <div id="kans"></div>
-  ${on(() => { const ask = async () => { const r = await api("/api/v1/knowledge/queries", { method: "POST", json: { projectId: S.project, question: $("#kq").value, subcontractId: $("#ksub").value || null, includeSupersededEvidence: $("#ksup").checked } });
+  ${on(() => { const ask = async () => { const r = await api("/api/v1/knowledge/queries", { method: "POST", json: { projectId: S.project, question: $("#kq").value, subcontractId: $("#ksub").value || null, includeSupersededEvidence: $("#ksup").checked, draftWithModel: $("#kllm").checked } });
       $("#kans").innerHTML = `<div class="card"><div class="row"><h2>Answer</h2>${pill(r.status, r.status === "SUPPORTED" ? "ok" : r.status === "INSUFFICIENT_EVIDENCE" ? "bad" : "warn")}${r.requiresProfessionalReview ? pill("REQUIRES PROFESSIONAL REVIEW", "info") : ""}<span class="spacer"></span><span class="small muted mono">${esc(r.method)}</span></div>
         ${r.answer ? `<p>${esc(r.answer)}</p>` : `<p><b>Insufficient evidence.</b> ${esc(r.missingEvidence.join(" "))}</p>`}
+        ${r.answerCitations?.length ? `<p class="small muted">Model draft verified against retrieved sources: ${r.answerCitations.map(c => `${esc(c.label)} = ${esc(c.documentNumber)}${c.clauseReference ? " cl. " + esc(c.clauseReference) : ""}`).join(" · ")}</p>` : ""}
         ${r.contradictions.map(c => `<div class="gate blocked"><b>Contradiction — clause ${esc(c.clause)}</b>: ${Object.entries(c.values).map(([v, src]) => `${esc(v)} days in ${esc(src.join(", "))}`).join(" vs ")}. ${esc(c.note)}</div>`).join("")}
         ${r.warnings.map(w => `<div class="gate blocked">${esc(w)}</div>`).join("")}
-        <h3>Sources</h3>${r.sources.map(s => `<div style="margin-bottom:10px"><div class="small mono">${esc(s.documentNumber)} rev ${esc(s.revision)} ${s.governing ? pill("GOVERNING", "ok") : s.approval === "NOT_APPROVED" ? pill("NOT APPROVED", "warn") : pill("SUPERSEDED")} ${s.clauseReference ? "cl. " + esc(s.clauseReference) : ""} ${s.page ? "p." + s.page : ""} ${s.cell ? esc(s.cell) : ""} · score ${s.score}</div><div class="quote">${esc(s.excerpt)}</div></div>`).join("") || `<p class="muted">None.</p>`}</div>`; };
+        <h3>Sources</h3>${r.sources.map((s, i) => `<div style="margin-bottom:10px"><div class="small mono">[S${i + 1}] ${esc(s.documentNumber)} rev ${esc(s.revision)} ${s.governing ? pill("GOVERNING", "ok") : s.approval === "NOT_APPROVED" ? pill("NOT APPROVED", "warn") : pill("SUPERSEDED")} ${s.clauseReference ? "cl. " + esc(s.clauseReference) : ""} ${s.page ? "p." + s.page : ""} ${s.cell ? esc(s.cell) : ""} · score ${s.score}</div><div class="quote">${esc(s.excerpt)}</div></div>`).join("") || `<p class="muted">None.</p>`}</div>`; };
     $("#kgo").onclick = ask; $("#kq").onkeydown = (e) => e.key === "Enter" && ask();
     document.querySelectorAll("[data-try]").forEach(a => a.onclick = (e) => { e.preventDefault(); $("#kq").value = a.dataset.try; ask(); }); })}`;
 };
@@ -266,6 +267,60 @@ VIEWS.audit = async () => {
   <div class="card"><table><tr><th>#</th><th>When (UTC)</th><th>Actor</th><th>Action</th><th>Object</th><th>Change</th></tr>
   ${ev.map(e => `<tr><td class="mono">${e.id}</td><td class="mono small">${esc(e.at.replace("T", " ").slice(0, 19))}</td><td>${esc(e.actor)}</td><td class="mono small">${esc(e.action)}</td><td class="small">${esc(e.object_type)} <span class="mono muted">${esc(e.object_id.slice(0,8))}</span></td>
     <td class="small">${e.before ? `<span class="muted">before</span> <span class="mono">${esc(JSON.stringify(e.before).slice(0, 140))}</span><br>` : ""}${e.after ? `<span class="muted">after</span> <span class="mono">${esc(JSON.stringify(e.after).slice(0, 160))}</span>` : ""}${e.reason ? `<br><span class="muted">reason</span> ${esc(e.reason)}` : ""}</td></tr>`).join("")}</table></div>`;
+};
+
+VIEWS.ai = async () => {
+  const [cat, provs, asg, me] = await Promise.all([api("/api/v1/llm/catalogue"), api("/api/v1/llm/providers"),
+                                                    api("/api/v1/llm/assignments"), api("/api/v1/me")]);
+  const admin = me.roles.includes("system_admin");
+  const calls = admin ? await api("/api/v1/llm/calls?limit=25") : [];
+  const opt = (sel) => `<option value="">Built-in rules / extractive (no LLM)</option>` + provs.filter(p => p.enabled)
+    .map(p => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(p.name)} — ${esc(p.provider_label)} · ${esc(p.model)} · ${esc(p.data_zone)}</option>`).join("");
+  return `<h1>AI providers</h1><p class="sub">The OS is LLM-agnostic. Register any provider by its endpoint, then choose which one serves each purpose. With none assigned, the built-in rules and extractive retrieval are used. Model output is always a proposal that a person reviews.</p>
+  ${admin ? "" : `<div class="gate blocked" style="margin-bottom:14px">Read-only: only a system administrator (switch to <b>sys.admin</b>) can register providers or change assignments.</div>`}
+  <div class="card"><h2>Assignments</h2><div class="form">
+    ${Object.entries(cat.purposes).map(([k, label]) => `<label>${esc(label)}</label><select data-asg="${k}" ${admin ? "" : "disabled"}>${opt(asg[k])}</select>`).join("")}</div>
+    <p class="small muted">Data-zone policy: documents classified above <b>${esc(cat.cloud_max_classification)}</b> are never sent to CLOUD-zone providers; the rules proposer is used and the reason is recorded on the proposal.</p>
+    ${admin ? `<button class="primary" id="asg-save">Save assignments</button>` : ""}</div>
+  <div class="card"><h2>Registered providers</h2>${provs.length ? `<table><tr><th>Name</th><th>Provider</th><th>Endpoint</th><th>Model</th><th>Zone</th><th>Key</th><th>Assigned</th><th></th></tr>
+    ${provs.map(p => `<tr><td><b>${esc(p.name)}</b>${p.enabled ? "" : " " + pill("DISABLED")}</td><td>${esc(p.provider_label)}<div class="small muted mono">${esc(p.protocol)}</div></td>
+      <td class="mono small">${esc(p.base_url)}</td><td class="mono small">${esc(p.model)}</td><td>${pill(p.data_zone, p.data_zone === "PRIVATE" ? "ok" : "info")}</td>
+      <td class="small">${esc(p.key_source)} ${p.key_hint ? `<span class="mono">${esc(p.key_hint)}</span>` : ""}</td><td class="small">${esc(p.assigned_to.join(", ") || "—")}</td>
+      <td class="row" style="flex-wrap:nowrap">${admin ? `<button data-test="${p.id}">Test</button><button data-toggle="${p.id}" data-en="${p.enabled}">${p.enabled ? "Disable" : "Enable"}</button><button class="danger" data-del="${p.id}">Remove</button>` : ""}</td></tr>`).join("")}</table>`
+    : `<p class="muted">No providers registered yet.</p>`}</div>
+  ${admin ? `<div class="card"><h2>Register a provider</h2><div class="form">
+    <label>Provider</label><select id="p-type">${cat.providers.map(c => `<option value="${c.key}">${esc(c.label)}</option>`).join("")}</select>
+    <label>Display name</label><input id="p-name" placeholder="e.g. Private Llama on GPU node">
+    <label>Endpoint (base URL)</label><input id="p-url">
+    <label>Model / deployment</label><input id="p-model" placeholder="model identifier exactly as the endpoint expects">
+    <label>API key</label><input id="p-key" type="password" placeholder="stored encrypted, never shown again">
+    <label>…or key from env var</label><input id="p-env" placeholder="e.g. SCOS_OPENAI_KEY (preferred in production)">
+    <label>Data zone</label><select id="p-zone"><option>CLOUD</option><option>PRIVATE</option></select>
+    <label>Temperature / max tokens</label><div class="row"><input id="p-temp" value="0" style="width:80px"><input id="p-max" value="800" style="width:100px"></div>
+    <label>API version (Azure)</label><input id="p-ver" placeholder="only for Azure OpenAI">
+    <label>Extra headers (JSON)</label><input id="p-hdr" placeholder='{"HTTP-Referer": "https://your.org"}'>
+    </div><p class="small muted" id="p-note"></p><button class="primary" id="p-go">Register provider</button></div>
+  <div class="card"><h2>Recent model calls</h2><p class="small muted">Metadata only. Prompt and response text are never logged.</p>${calls.length ? `<table><tr><th>When</th><th>Provider</th><th>Purpose</th><th>Result</th><th>Latency</th><th>Chars in/out</th></tr>
+    ${calls.map(c => `<tr><td class="mono small">${esc(c.at.replace("T", " ").slice(0, 19))}</td><td>${esc(c.provider)} <span class="mono small muted">${esc(c.model)}</span></td><td>${esc(c.purpose)}</td><td>${pill(c.ok ? "OK" : "FAILED", c.ok ? "ok" : "bad")} <span class="small muted">${c.ok ? "" : esc(c.outcome)}</span></td><td class="mono">${c.latency_ms} ms</td><td class="mono small">${c.prompt_chars}/${c.response_chars}</td></tr>`).join("")}</table>` : `<p class="muted">No calls yet.</p>`}</div>` : ""}
+  ${on(() => {
+    if (!admin) return;
+    const fill = () => { const c = cat.providers.find(x => x.key === $("#p-type").value); $("#p-url").value = c.default_base_url; $("#p-zone").value = c.default_zone;
+      $("#p-note").textContent = `${c.protocol} protocol · ${c.requires_key ? "API key required" : "key optional"}${c.note ? " · " + c.note : ""}`; };
+    $("#p-type").onchange = fill; fill();
+    $("#p-go").onclick = async () => { let headers = {};
+      try { headers = $("#p-hdr").value ? JSON.parse($("#p-hdr").value) : {}; } catch (e) { return toast("Extra headers must be JSON", true); }
+      const extra = {}; if ($("#p-ver").value) extra.api_version = $("#p-ver").value; if (Object.keys(headers).length) extra.headers = headers;
+      try { await api("/api/v1/llm/providers", { method: "POST", json: { name: $("#p-name").value, provider_type: $("#p-type").value, base_url: $("#p-url").value,
+        model: $("#p-model").value, api_key: $("#p-key").value || null, api_key_env: $("#p-env").value || null, data_zone: $("#p-zone").value,
+        temperature: Number($("#p-temp").value), max_tokens: Number($("#p-max").value), extra } }); toast("Provider registered"); render(); } catch (e) {} };
+    $("#asg-save").onclick = async () => { const body = {}; document.querySelectorAll("[data-asg]").forEach(s => body[s.dataset.asg] = s.value || null);
+      try { await api("/api/v1/llm/assignments", { method: "PUT", json: body }); toast("Assignments saved"); render(); } catch (e) {} };
+    document.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = "Testing…";
+      const r = await api(`/api/v1/llm/providers/${b.dataset.test}/test`, { method: "POST" }).catch(() => ({ ok: false, error: "request failed" }));
+      toast(r.ok ? `Connected in ${r.latency_ms} ms: ${r.sample}` : `Test failed: ${r.error}`, !r.ok); render(); });
+    document.querySelectorAll("[data-toggle]").forEach(b => b.onclick = async () => { try { await api(`/api/v1/llm/providers/${b.dataset.toggle}`, { method: "PATCH", json: { enabled: b.dataset.en !== "true" } }); render(); } catch (e) {} });
+    document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { if (!confirm("Remove this provider?")) return; try { await api(`/api/v1/llm/providers/${b.dataset.del}`, { method: "DELETE" }); toast("Removed"); render(); } catch (e) {} });
+  })}`;
 };
 
 boot();

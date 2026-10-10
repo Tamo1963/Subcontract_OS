@@ -36,7 +36,7 @@ tr.click{cursor:pointer} tr.click:hover td{background:#f9fafb}
 .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--line-2);color:var(--ink-2);white-space:nowrap}
 .HIGH{background:var(--high-soft);color:var(--high)} .MEDIUM{background:var(--med-soft);color:var(--med)} .LOW{background:var(--low-soft);color:var(--low)}
 .ok{background:var(--low-soft);color:var(--low)} .bad{background:var(--high-soft);color:var(--high)} .warn{background:var(--med-soft);color:var(--med)} .info{background:var(--info-soft);color:var(--info)}
-button{font:inherit;font-weight:500;border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 12px;cursor:pointer}
+button{white-space:nowrap;font:inherit;font-weight:500;border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 12px;cursor:pointer}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff} button.danger{color:var(--high);border-color:#f3c3be}
 button:hover{filter:brightness(.97)} button:disabled{opacity:.5;cursor:not-allowed}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}

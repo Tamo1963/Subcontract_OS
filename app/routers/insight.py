@@ -21,13 +21,14 @@ class QueryIn(BaseModel):
     question: str
     subcontractId: str | None = None
     includeSupersededEvidence: bool = False
+    draftWithModel: bool = False
 
 
 @router.post("/knowledge/queries")
 def ask(body: QueryIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     require(db, user, "project.read", body.projectId)    # permission before retrieval (CI-07, SEC-01)
     return knowledge.query(db, user, body.projectId, body.question, body.subcontractId,
-                           body.includeSupersededEvidence)
+                           body.includeSupersededEvidence, synthesise=body.draftWithModel)
 
 
 @router.get("/projects/{pid}/dashboard")
