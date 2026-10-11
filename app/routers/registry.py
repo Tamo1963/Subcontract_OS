@@ -26,18 +26,12 @@ def sc_out(s: Subcontractor) -> dict:
             "country_code": s.country_code, "disciplines": s.disciplines, "entity_status": s.entity_status}
 
 
-@router.get("/users")
-def list_users(db: Session = Depends(get_db)):
-    """Demo identity directory for the user switcher (replace with the identity provider)."""
-    return [{"username": u.username, "full_name": u.full_name, "roles": u.roles}
-            for u in db.scalars(select(User).order_by(User.username))]
-
-
 @router.get("/me")
 def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     ms = db.scalars(select(ProjectMembership).where(ProjectMembership.user_id == user.id))
     return {"id": user.id, "username": user.username, "full_name": user.full_name, "roles": user.roles,
-            "clearance": user.clearance, "projects": {m.project_id: m.roles for m in ms}}
+            "clearance": user.clearance, "projects": {m.project_id: m.roles for m in ms},
+            "must_change_password": bool(user.must_change_password and user.password_hash)}
 
 
 @router.post("/subcontractors", status_code=201)
@@ -126,11 +120,25 @@ def add_member(pid: str, body: MemberIn, user: User = Depends(current_user), db:
     target = db.scalar(select(User).where(User.username == body.username))
     if not target:
         raise HTTPException(404, {"code": "NOT_FOUND", "message": "User not found"})
-    db.add(ProjectMembership(user_id=target.id, project_id=pid, roles=body.roles))
+    existing = db.scalar(select(ProjectMembership).where(ProjectMembership.user_id == target.id,
+                                                         ProjectMembership.project_id == pid))
+    if existing:   # add roles to an existing membership instead of failing
+        body.roles = sorted(set(existing.roles) | set(body.roles))
+        existing.roles = body.roles
+    else:
+        db.add(ProjectMembership(user_id=target.id, project_id=pid, roles=body.roles))
     audit.record(db, user.id, "membership.granted", "Project", pid, project_id=pid,
                  after={"user": body.username, "roles": body.roles})
     db.commit()
     return {"project_id": pid, "username": body.username, "roles": body.roles}
+
+
+@router.get("/projects/{pid}/members")
+def list_members(pid: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require(db, user, "project.read", pid)
+    rows = db.execute(select(ProjectMembership, User).join(User, ProjectMembership.user_id == User.id)
+                      .where(ProjectMembership.project_id == pid).order_by(User.username))
+    return [{"username": u.username, "full_name": u.full_name, "roles": m.roles} for m, u in rows]
 
 
 @router.delete("/projects/{pid}/members/{username}")

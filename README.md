@@ -59,21 +59,40 @@ See [ADR-0001](docs/adr/0001-mvp-baseline.md).
 
 ## Run it
 
-**Windows:** double-click `start_windows.bat` (or run `.\start_windows.bat` in PowerShell). It creates a
-virtual environment, installs dependencies, loads the demo and opens http://localhost:8000.
+### 1. PostgreSQL (recommended)
 
-**Any OS:**
+Install PostgreSQL 16 (Windows: `winget install PostgreSQL.PostgreSQL.16`), then from the project folder:
 
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts\setup_postgres.ps1
+```
 ```bash
-pip install -r requirements.txt reportlab
-python -m seed.make_samples      # fictional pilot document pack
-python -m seed.demo_seed         # loads the demo through the API (resets ./var)
-uvicorn app.main:app --reload    # http://localhost:8000   API docs: /docs
+# Linux / macOS
+scripts/setup_postgres.sh
 ```
 
-Or `docker build -t subcontract-os . && docker run -p 8000:8000 subcontract-os`.
+The script asks once for the PostgreSQL superuser password, then:
+- creates the role **`scos_app`** with a random **temporary password valid for 30 days** and the database `subcontract_os`;
+- writes `.env` (git-ignored) with the connection string;
+- installs dependencies, applies the Alembic migrations and loads the demo;
+- prints the database password and the **temporary sign-in password** for the demo users.
 
-Use **Acting as** in the top bar to switch users and see the permissions change:
+Rotate the database password before real use (see [ADR-0003](docs/adr/0003-postgresql-and-migrations.md)).
+Containers: `SCOS_DB_PASSWORD=<temp> docker compose up -d`.
+
+### 2. Start the app
+
+**Windows:** double-click `start_windows.bat`. **Any OS:** `python -m uvicorn app.main:app` → http://localhost:8000
+
+Without a `.env`, the app falls back to SQLite in `./var` (handy for a quick look; `start_windows.bat` loads the demo).
+
+### 3. Sign in
+
+Every demo user starts with the same **temporary password**, printed by the loader and saved in
+`var/INITIAL_CREDENTIALS.txt`. At first sign-in each user must set their own password
+(≥ 12 characters, upper/lower case and a digit). Administrators issue temporary passwords for new users in
+**Users & access**; `python -m app.cli create-admin` bootstraps an administrator on an empty database.
 
 | User | Role on P-101 | Try |
 |---|---|---|
@@ -82,15 +101,18 @@ Use **Acting as** in the top bar to switch users and see the permissions change:
 | `meera.approver` | Contracts approver | Approve release / risk exception (SC-101-02 is blocked at the gate) |
 | `arjun.qaqc`, `sana.hse` | QA/QC, HSE | Submit evidence (CONFIDENTIAL clearance) |
 | `dev.audit` | Auditor | Audit trail, traces |
+| `priya.coord` | Project coordinator | Add people to the project team |
 | `omar.solar` | Member of P-202 only | Cross-project access is denied |
+| `sys.admin` | System administrator | Users & access, AI providers |
 
-> Authentication is a development stub (`X-User` header). Authorisation is enforced in the API.
-> All organisations, people and values in the demo are fictional.
+Sessions, lockout, CSRF protection and the password policy are described in
+[ADR-0004](docs/adr/0004-authentication.md). All organisations, people and values in the demo are fictional.
 
 ## Tests
 
 ```bash
-python -m pytest -q        # 50 tests: blueprint acceptance IDs + LLM-agnostic layer
+python -m pytest -q        # 62 tests: acceptance IDs, LLM layer, authentication
+SCOS_TEST_DATABASE_URL=postgresql+psycopg://... python -m pytest -q   # same suite on PostgreSQL
 ```
 
 See [docs/acceptance-traceability.md](docs/acceptance-traceability.md).
@@ -113,7 +135,7 @@ docs/                  blueprint, ADRs, traceability
 
 ## Next steps (roadmap)
 
-1. Confirm the ADR-0001 decisions; move to PostgreSQL + Alembic; replace the auth stub with SSO/MFA.
+1. Confirm the ADR-0001 decisions; enterprise SSO (OIDC) + MFA on the new session layer; backups and restore drill.
 2. OCR for scanned contracts; email and batch intake; background worker for processing jobs.
 3. pgvector semantic stage; evaluate registered models against the labelled set before assignment.
 4. Phase 4–5 modules: mobilisation and enablers, field/QA/HSE, variations, measurement and payment.

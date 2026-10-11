@@ -21,10 +21,15 @@ if errorlevel 1 (
   if errorlevel 1 ( echo ERROR: dependency installation failed - see messages above. & pause & exit /b 1 )
 )
 
-if not exist "var\subcontract_os.db" (
-  echo [3/4] Loading demo data...
+if not exist "var\.demo_loaded" (
+  echo [3/4] Loading demo data ^(prints the temporary sign-in password^)...
   "%PY%" -m seed.make_samples
   "%PY%" -m seed.demo_seed
+  if errorlevel 1 ( echo ERROR: demo load failed - see above. & pause & exit /b 1 )
+  type nul > "var\.demo_loaded"
+  echo.
+  echo The temporary password is also saved in var\INITIAL_CREDENTIALS.txt
+  pause
 )
 
 echo [4/4] Starting Subcontract OS on http://localhost:8000  (Ctrl+C to stop)

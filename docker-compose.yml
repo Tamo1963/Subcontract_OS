@@ -1,0 +1,22 @@
+# docker compose up -d   (set SCOS_DB_PASSWORD in your shell or a .env file first)
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: scos_app
+      POSTGRES_PASSWORD: ${SCOS_DB_PASSWORD:?set SCOS_DB_PASSWORD}
+      POSTGRES_DB: subcontract_os
+    volumes: [pgdata:/var/lib/postgresql/data]
+    ports: ["5432:5432"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U scos_app -d subcontract_os"], interval: 5s, retries: 10 }
+  app:
+    build: .
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      SCOS_DATABASE_URL: postgresql+psycopg://scos_app:${SCOS_DB_PASSWORD}@db:5432/subcontract_os
+      SCOS_AUTO_MIGRATE: "1"
+    volumes: [objects:/srv/var]
+    ports: ["8000:8000"]
+volumes:
+  pgdata: {}
+  objects: {}

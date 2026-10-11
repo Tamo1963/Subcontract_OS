@@ -21,19 +21,22 @@
     <a data-view="knowledge">Knowledge query</a>
     <a data-view="audit">Audit trail</a>
     <a data-view="ai">AI providers</a>
+    <a data-view="users" id="nav-users" class="hidden">Users &amp; access</a>
   </nav>
-  <div class="side-foot">Demo data is fictional.<br>Auth is a dev stub (X-User).</div>
+  <div class="side-foot">Demo data is fictional.<br>Sessions expire after inactivity limits set by the administrator.</div>
 </aside>
 <main>
   <header class="top">
     <div class="ctx">
       <label>Project <select id="project"></select></label>
-      <label>Acting as <select id="user"></select></label>
     </div>
-    <div id="whoami" class="who"></div>
+    <div class="row"><div id="whoami" class="who"></div><button id="pw-btn">Change password</button><button id="logout-btn">Sign out</button></div>
   </header>
   <section id="view"></section>
 </main>
+<div id="login" class="login hidden"><div class="login-card">
+  <div class="brand-l"><span class="mark">S</span><div><b>Subcontract OS</b><small>Contract-to-evidence platform</small></div></div>
+  <div id="login-body"></div></div></div>
 <div id="toast"></div>
 <div id="modal" class="modal hidden"><div class="modal-card"><button class="x" onclick="closeModal()">×</button><div id="modal-body"></div></div></div>
 <script src="/static/app.js"></script>

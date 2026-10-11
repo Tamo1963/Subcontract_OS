@@ -1,4 +1,6 @@
-"""Database engine and session handling (SQLite for the MVP, PostgreSQL via SCOS_DATABASE_URL)."""
+"""Database engine and session handling: PostgreSQL (SCOS_DATABASE_URL) or SQLite for development."""
+import os
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -10,7 +12,8 @@ class Base(DeclarativeBase):
 
 
 def make_engine(url: str):
-    kwargs = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else {}
+    kwargs = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else \
+        {"pool_pre_ping": True, "pool_size": 5, "max_overflow": 10}
     engine = create_engine(url, future=True, **kwargs)
     if url.startswith("sqlite"):
         @event.listens_for(engine, "connect")
@@ -30,8 +33,35 @@ def init_db(url: str | None = None):
     engine = make_engine(url or config.DATABASE_URL)
     SessionLocal.configure(bind=engine)
     from app import models  # noqa: F401  (register tables)
-    Base.metadata.create_all(engine)
+    if config.is_sqlite(str(engine.url)):
+        Base.metadata.create_all(engine)          # development / tests
+    elif os.environ.get("SCOS_AUTO_MIGRATE", "1") == "1":
+        migrate(engine)                           # PostgreSQL: versioned Alembic migrations
     return engine
+
+
+def migrate(engine_=None):
+    """Apply Alembic migrations up to head (idempotent)."""
+    from alembic import command
+    from alembic.config import Config
+    cfg = Config(str(config.BASE_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(config.BASE_DIR / "migrations"))
+    with (engine_ or engine).begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "head")
+
+
+def reset_database():
+    """Drop every application table and re-create the schema (demo reset only)."""
+    from sqlalchemy import text
+    from app import models  # noqa: F401
+    Base.metadata.drop_all(engine)
+    if not config.is_sqlite(str(engine.url)):
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        migrate()
+    else:
+        Base.metadata.create_all(engine)
 
 
 def get_db():

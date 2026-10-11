@@ -1,7 +1,7 @@
 name: ci
 on: [push, pull_request]
 jobs:
-  test:
+  test-sqlite:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -9,4 +9,26 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt reportlab
       - run: python -m seed.make_samples
+      - run: python -m pytest -q
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: scos_app, POSTGRES_PASSWORD: ci-temp-password, POSTGRES_DB: subcontract_os }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    env:
+      SCOS_TEST_DATABASE_URL: postgresql+psycopg://scos_app:ci-temp-password@localhost:5432/subcontract_os
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt reportlab
+      - run: python -m seed.make_samples
+      - name: Migrations apply cleanly and match the models
+        env: { SCOS_DATABASE_URL: postgresql+psycopg://scos_app:ci-temp-password@localhost:5432/subcontract_os }
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
       - run: python -m pytest -q

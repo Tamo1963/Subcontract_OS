@@ -1,16 +1,19 @@
 """Authorisation (blueprint Section 9).
 
-MVP authentication: the caller identifies with an ``X-User`` header (username). This stands in
-for the enterprise identity provider + MFA and must be replaced before any non-demo use.
-Authorisation is real: every call checks the action permission, the project membership and the
-document classification in the API/data layer - never only in the UI.
+Authentication is session-based (see app/auth.py). Authorisation is enforced on every call: action
+permission, project membership, document classification and segregation of duties are checked in the
+API/data layer - never only in the UI.
 """
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import auth, config
 from app.db import get_db
-from app.models import ProjectMembership, User
+from app.models import ProjectMembership, User, UserSession
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+PASSWORD_CHANGE_ALLOWED = ("/api/v1/auth/", "/api/v1/me")
 
 CLEARANCE_ORDER = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"]
 
@@ -41,12 +44,28 @@ PERMISSIONS: dict[str, set[str]] = {
 }
 
 
-def current_user(x_user: str | None = Header(default=None), db: Session = Depends(get_db)) -> User:
-    if not x_user:
-        raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "X-User header required"})
-    user = db.scalar(select(User).where(User.username == x_user))
+def _session_user(db: Session, token: str) -> User | None:
+    sess = db.scalar(select(UserSession).where(UserSession.token_hash == auth.token_hash(token)))
+    if not sess or sess.revoked_at or auth.aware(sess.expires_at) <= auth.utcnow():
+        return None
+    return db.get(User, sess.user_id)
+
+
+def current_user(request: Request, db: Session = Depends(get_db), authorization: str | None = Header(default=None),
+                 x_user: str | None = Header(default=None)) -> User:
+    user, via_cookie = None, False
+    if authorization and authorization.lower().startswith("bearer "):
+        user = _session_user(db, authorization[7:].strip())
+    elif request.cookies.get(auth.COOKIE):
+        user, via_cookie = _session_user(db, request.cookies[auth.COOKIE]), True
+    elif x_user and config.ALLOW_DEV_AUTH:     # development/test only; disabled by default
+        user = db.scalar(select(User).where(User.username == x_user))
     if not user or not user.is_active:
-        raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "Unknown or inactive user"})
+        raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "Sign in required"})
+    if via_cookie and request.method not in SAFE_METHODS and request.headers.get("X-SCOS-CSRF") != "1":
+        raise HTTPException(403, {"code": "CSRF", "message": "Missing anti-forgery header"})
+    if user.must_change_password and user.password_hash and not request.url.path.startswith(PASSWORD_CHANGE_ALLOWED):
+        raise HTTPException(403, {"code": "PASSWORD_CHANGE_REQUIRED", "message": "Change your temporary password first"})
     return user
 
 

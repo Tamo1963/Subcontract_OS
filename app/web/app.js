@@ -1,6 +1,5 @@
 // Subcontract OS - internal workspace (vanilla JS, no build step).
-const S = { user: localStorage.getItem("scos.user") || "anita.contracts", project: null, view: "dashboard",
-            sub: null, ob: null, users: [] };
+const S = { me: null, project: null, view: "dashboard", sub: null, ob: null };
 const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pill = (t, cls) => `<span class="pill ${esc(cls || t)}">${esc(t)}</span>`;
@@ -11,11 +10,17 @@ const statusCls = (s) => ({CLOSED:"ok",APPROVED:"ok",ACCEPTED:"ok",PUBLISHED:"ok
   REJECTED:"bad",SUPERSEDED:"",APPROVAL_PENDING:"warn"}[s] || "");
 
 async function api(path, opts = {}) {
-  const headers = { "X-User": S.user, ...(opts.headers || {}) };
+  const headers = { "X-SCOS-CSRF": "1", ...(opts.headers || {}) };   // anti-forgery header on every call
   if (opts.json) { headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.json); }
-  const r = await fetch(path, { ...opts, headers });
+  const r = await fetch(path, { ...opts, headers, credentials: "same-origin" });
   const body = r.headers.get("content-type")?.includes("json") ? await r.json() : await r.text();
-  if (!r.ok) { const e = body?.error || { message: body }; toast(`${e.code || r.status}: ${e.message}`, true); throw e; }
+  if (!r.ok) {
+    const e = body?.error || { message: body };
+    if (r.status === 401 && !opts.quiet) { showLogin("Your session has ended. Please sign in again."); throw e; }
+    if (e.code === "PASSWORD_CHANGE_REQUIRED") { showChangePassword(true); throw e; }
+    if (!opts.quiet) toast(`${e.code || r.status}: ${e.message}`, true);
+    throw e;
+  }
   return body;
 }
 function toast(msg, err) { const d = document.createElement("div"); d.className = "t" + (err ? " err" : "");
@@ -24,16 +29,49 @@ function openModal(html) { $("#modal-body").innerHTML = html; $("#modal").classL
 function closeModal() { $("#modal").classList.add("hidden"); }
 
 async function boot() {
-  S.users = await api("/api/v1/users");
-  $("#user").innerHTML = S.users.map(u => `<option value="${esc(u.username)}">${esc(u.full_name)}</option>`).join("");
-  $("#user").value = S.user;
-  $("#user").onchange = async (e) => { S.user = e.target.value; localStorage.setItem("scos.user", S.user); await loadProjects(); };
   $("#project").onchange = (e) => { S.project = e.target.value; S.sub = null; render(); };
   document.querySelectorAll("#nav a").forEach(a => a.onclick = () => go(a.dataset.view));
+  $("#logout-btn").onclick = async () => { await api("/api/v1/auth/logout", { method: "POST", quiet: true }).catch(() => {}); showLogin("Signed out."); };
+  $("#pw-btn").onclick = () => showChangePassword(false);
+  try { S.me = await api("/api/v1/me", { quiet: true }); } catch (e) { return showLogin(); }
+  if (S.me.must_change_password) return showChangePassword(true);
+  $("#login").classList.add("hidden");
+  $("#nav-users").classList.toggle("hidden", !S.me.roles.includes("system_admin"));
   await loadProjects();
 }
+function showLogin(msg = "") {
+  $("#login").classList.remove("hidden");
+  $("#login-body").innerHTML = `<h2>Sign in</h2>
+    <label>Username</label><input id="l-user" autocomplete="username" autofocus>
+    <label>Password</label><input id="l-pw" type="password" autocomplete="current-password">
+    <div class="err" id="l-err">${esc(msg)}</div><button class="primary" id="l-go">Sign in</button>
+    <p class="hint">First sign-in uses the temporary password issued by your administrator; you will be asked to set your own.</p>`;
+  const go = async () => {
+    try { await api("/api/v1/auth/login", { method: "POST", quiet: true, json: { username: $("#l-user").value, password: $("#l-pw").value } }); boot(); }
+    catch (e) { $("#l-err").textContent = e.message || "Sign-in failed"; }
+  };
+  $("#l-go").onclick = go; $("#l-pw").onkeydown = (e) => e.key === "Enter" && go(); $("#l-user").focus();
+}
+function showChangePassword(forced) {
+  $("#login").classList.remove("hidden");
+  $("#login-body").innerHTML = `<h2>${forced ? "Set your password" : "Change password"}</h2>
+    ${forced ? `<p class="hint" style="margin-top:0">You signed in with a temporary password. Choose your own to continue.</p>` : ""}
+    <label>Current (temporary) password</label><input id="c-old" type="password" autocomplete="current-password">
+    <label>New password</label><input id="c-new" type="password" autocomplete="new-password">
+    <label>Repeat new password</label><input id="c-new2" type="password" autocomplete="new-password">
+    <p class="hint">At least 12 characters with upper- and lower-case letters and a digit; must not contain your username.</p>
+    <div class="err" id="c-err"></div><button class="primary" id="c-go">Save password</button>
+    ${forced ? "" : `<button id="c-cancel">Cancel</button>`}`;
+  $("#c-go").onclick = async () => {
+    if ($("#c-new").value !== $("#c-new2").value) return ($("#c-err").textContent = "The new passwords do not match.");
+    try { await api("/api/v1/auth/change-password", { method: "POST", quiet: true, json: { current_password: $("#c-old").value, new_password: $("#c-new").value } });
+          toast("Password changed"); boot(); }
+    catch (e) { $("#c-err").textContent = e.message || "Could not change password"; }
+  };
+  $("#c-cancel") && ($("#c-cancel").onclick = () => $("#login").classList.add("hidden"));
+}
 async function loadProjects() {
-  const me = await api("/api/v1/me");
+  const me = S.me = await api("/api/v1/me");
   $("#whoami").innerHTML = `<b>${esc(me.username)}</b> · roles: ${esc([...new Set([...me.roles, ...Object.values(me.projects).flat()])].join(", ") || "none")} · clearance ${esc(me.clearance)}`;
   const ps = await api("/api/v1/projects");
   $("#project").innerHTML = ps.length ? ps.map(p => `<option value="${p.id}">${esc(p.project_code)} — ${esc(p.name)}</option>`).join("")
@@ -46,7 +84,7 @@ function go(view, extra = {}) { Object.assign(S, extra); S.view = view;
   document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === view)); render(); }
 async function render() {
   const v = $("#view");
-  if (!S.project && S.view !== "ai") { v.innerHTML = `<h1>No project access</h1><p class="sub">This user is not a member of any project. Access is enforced by the API, not the UI.</p>`; return; }
+  if (!S.project && !["ai", "users"].includes(S.view)) { v.innerHTML = `<h1>No project access</h1><p class="sub">This user is not a member of any project. Access is enforced by the API, not the UI.</p>`; return; }
   v.innerHTML = `<p class="muted">Loading…</p>`;
   try { v.innerHTML = await VIEWS[S.view](); bindView(); }
   catch (e) { v.innerHTML = `<div class="card"><h2>Not available</h2><p class="muted">${esc(e.code || "")} ${esc(e.message || e)}</p></div>`; }
@@ -58,7 +96,9 @@ function bindView() { const b = binders; binders = []; b.forEach(f => f()); }
 // ---------------------------------------------------------------- views
 const VIEWS = {};
 VIEWS.dashboard = async () => {
-  const [d, p] = await Promise.all([api(`/api/v1/projects/${S.project}/dashboard`), api(`/api/v1/projects/${S.project}`)]);
+  const [d, p, members] = await Promise.all([api(`/api/v1/projects/${S.project}/dashboard`), api(`/api/v1/projects/${S.project}`),
+                                             api(`/api/v1/projects/${S.project}/members`)]);
+  const isCoord = (S.me?.roles || []).includes("project_coordinator") || (S.me?.projects?.[S.project] || []).includes("project_coordinator");
   const k = (v, l, cls = "") => `<div class="kpi ${cls}"><div class="v">${v}</div><div class="l">${l}</div></div>`;
   const obRow = (o) => `<tr class="click" data-ob="${o.id}" data-sub="${o.subcontract_id}"><td class="mono">${esc(o.number)}</td><td>${esc(o.statement)}</td><td class="mono">${esc(o.due_at)}</td><td>${pill(o.risk_level)}</td><td>${esc(o.owner_role)}</td></tr>`;
   return `<h1>Portfolio control</h1><p class="sub">${esc(p.project_code)} · ${esc(p.name)} · ${esc(p.location)} · sector ${esc(p.sector_code)}</p>
@@ -75,9 +115,16 @@ VIEWS.dashboard = async () => {
   </div>
   <div class="card"><h2>Subcontracts</h2><table><tr><th>Number</th><th>Scope</th><th>Discipline</th><th>Value</th><th>Status</th></tr>
   ${p.subcontracts.map(s => `<tr class="click" data-sub-open="${s.id}"><td class="mono">${esc(s.subcontract_number)}</td><td>${esc(s.scope_summary)}</td><td>${esc(s.discipline)}</td><td class="mono">${esc(s.currency)} ${Number(s.contract_value).toLocaleString("en-IN")}</td><td>${pill(s.status, statusCls(s.status))}</td></tr>`).join("")}</table></div>
+  <div class="card"><div class="row"><h2>Project team</h2><span class="spacer"></span><span class="small muted">Project roles are granted here by the project coordinator.</span></div>
+    <table><tr><th>User</th><th>Project roles</th><th></th></tr>${members.map(m => `<tr><td><b>${esc(m.username)}</b> <span class="small muted">${esc(m.full_name)}</span></td><td class="small">${esc(m.roles.join(", "))}</td>
+      <td>${isCoord ? `<button class="danger" data-rm="${esc(m.username)}">Remove</button>` : ""}</td></tr>`).join("")}</table>
+    ${isCoord ? `<div class="row" style="margin-top:10px"><input id="m-user" placeholder="username"><select id="m-role">${["contracts_manager","legal_reviewer","contracts_approver","commercial_manager","qaqc_manager","hse_manager","construction_manager","project_controls","procurement_manager","auditor","registry_manager","project_coordinator"].map(r => `<option>${r}</option>`).join("")}</select><button class="primary" id="m-add">Add to project</button></div>` : ""}</div>
   <div class="card"><h2>Flow-down status</h2><p>${d.flowdown.total} source provisions mapped across subcontracts · ${d.flowdown.unresolved} without an approved disposition (${d.flowdown.unresolved_high} HIGH risk).</p>
   <p class="small muted">Obligations: ${d.obligations.total} total · ${d.obligations.open} open · ${d.obligations.closed} closed with accepted evidence. Every figure drills down to source records.</p></div>
-  ${on(() => { document.querySelectorAll("[data-ob]").forEach(r => r.onclick = () => go("obligations", { sub: r.dataset.sub, ob: r.dataset.ob }));
+  ${on(() => {
+    $("#m-add") && ($("#m-add").onclick = async () => { try { await api(`/api/v1/projects/${S.project}/members`, { method: "POST", json: { username: $("#m-user").value.trim(), roles: [$("#m-role").value] } }); toast("Member added"); render(); } catch (e) {} });
+    document.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => { if (!confirm(`Remove ${b.dataset.rm} from this project?`)) return; try { await api(`/api/v1/projects/${S.project}/members/${b.dataset.rm}`, { method: "DELETE" }); render(); } catch (e) {} });
+    document.querySelectorAll("[data-ob]").forEach(r => r.onclick = () => go("obligations", { sub: r.dataset.sub, ob: r.dataset.ob }));
                document.querySelectorAll("[data-sub-open]").forEach(r => r.onclick = () => go("subcontracts", { sub: r.dataset.subOpen })); })}`;
 };
 
@@ -277,7 +324,7 @@ VIEWS.ai = async () => {
   const opt = (sel) => `<option value="">Built-in rules / extractive (no LLM)</option>` + provs.filter(p => p.enabled)
     .map(p => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(p.name)} — ${esc(p.provider_label)} · ${esc(p.model)} · ${esc(p.data_zone)}</option>`).join("");
   return `<h1>AI providers</h1><p class="sub">The OS is LLM-agnostic. Register any provider by its endpoint, then choose which one serves each purpose. With none assigned, the built-in rules and extractive retrieval are used. Model output is always a proposal that a person reviews.</p>
-  ${admin ? "" : `<div class="gate blocked" style="margin-bottom:14px">Read-only: only a system administrator (switch to <b>sys.admin</b>) can register providers or change assignments.</div>`}
+  ${admin ? "" : `<div class="gate blocked" style="margin-bottom:14px">Read-only: only a system administrator can register providers or change assignments.</div>`}
   <div class="card"><h2>Assignments</h2><div class="form">
     ${Object.entries(cat.purposes).map(([k, label]) => `<label>${esc(label)}</label><select data-asg="${k}" ${admin ? "" : "disabled"}>${opt(asg[k])}</select>`).join("")}</div>
     <p class="small muted">Data-zone policy: documents classified above <b>${esc(cat.cloud_max_classification)}</b> are never sent to CLOUD-zone providers; the rules proposer is used and the reason is recorded on the proposal.</p>
@@ -320,6 +367,35 @@ VIEWS.ai = async () => {
       toast(r.ok ? `Connected in ${r.latency_ms} ms: ${r.sample}` : `Test failed: ${r.error}`, !r.ok); render(); });
     document.querySelectorAll("[data-toggle]").forEach(b => b.onclick = async () => { try { await api(`/api/v1/llm/providers/${b.dataset.toggle}`, { method: "PATCH", json: { enabled: b.dataset.en !== "true" } }); render(); } catch (e) {} });
     document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { if (!confirm("Remove this provider?")) return; try { await api(`/api/v1/llm/providers/${b.dataset.del}`, { method: "DELETE" }); toast("Removed"); render(); } catch (e) {} });
+  })}`;
+};
+
+VIEWS.users = async () => {
+  const [d, log] = await Promise.all([api("/api/v1/users"), api("/api/v1/users/audit")]);
+  return `<h1>Users &amp; access</h1><p class="sub">Create accounts with one-time temporary passwords, reset passwords, unlock and deactivate users. Project access is granted per project by its coordinator.</p>
+  <div class="card"><h2>Accounts</h2><table><tr><th>User</th><th>Global roles</th><th>Clearance</th><th>Status</th><th>Last sign-in</th><th></th></tr>
+  ${d.users.map(u => `<tr><td><b>${esc(u.username)}</b><div class="small muted">${esc(u.full_name)}</div></td><td class="small">${esc(u.roles.join(", ") || "—")}</td><td>${esc(u.clearance)}</td>
+    <td>${u.is_active ? pill("ACTIVE", "ok") : pill("DISABLED", "bad")} ${u.locked ? pill("LOCKED", "bad") : ""} ${u.must_change_password ? pill("TEMP PASSWORD", "warn") : ""}</td>
+    <td class="mono small">${esc((u.last_login_at || "never").replace("T", " ").slice(0, 16))}</td>
+    <td class="row" style="flex-wrap:nowrap"><button data-reset="${esc(u.username)}">Reset password</button>${u.locked ? `<button data-unlock="${esc(u.username)}">Unlock</button>` : ""}
+      <button class="${u.is_active ? "danger" : ""}" data-active="${esc(u.username)}" data-to="${!u.is_active}">${u.is_active ? "Disable" : "Enable"}</button></td></tr>`).join("")}</table></div>
+  <div class="card"><h2>New user</h2><div class="form">
+    <label>Username</label><input id="nu-name" placeholder="firstname.lastname">
+    <label>Full name</label><input id="nu-full">
+    <label>Global roles</label><select id="nu-roles" multiple size="5">${d.roles.map(r => `<option>${r}</option>`).join("")}</select>
+    <label>Clearance</label><select id="nu-clr">${d.clearances.map(c => `<option ${c === "CONFIDENTIAL" ? "selected" : ""}>${c}</option>`).join("")}</select></div>
+    <p class="small muted">Most roles are granted per project by its coordinator (Portfolio control → Project team). Global roles are for registry, coordination and administration.</p>
+    <button class="primary" id="nu-go">Create user</button></div>
+  <div class="card"><h2>Sign-in and account events</h2><table><tr><th>When (UTC)</th><th>Actor</th><th>Event</th><th>Account</th></tr>
+  ${log.map(e => `<tr><td class="mono small">${esc(e.at.replace("T", " ").slice(0, 19))}</td><td>${esc(e.actor)}</td><td class="mono small">${esc(e.action)}</td><td>${esc(e.subject)}</td></tr>`).join("")}</table></div>
+  ${on(() => {
+    const showTemp = (r) => openModal(`<h2>Temporary password for ${esc(r.username)}</h2><p>Shown once. Give it to the user through a secure channel; they must change it at first sign-in.</p><p class="secret">${esc(r.temporary_password)}</p>`);
+    $("#nu-go").onclick = async () => { try { const r = await api("/api/v1/users", { method: "POST", json: { username: $("#nu-name").value, full_name: $("#nu-full").value,
+      roles: [...$("#nu-roles").selectedOptions].map(o => o.value), clearance: $("#nu-clr").value } }); render(); showTemp(r); } catch (e) {} };
+    document.querySelectorAll("[data-reset]").forEach(b => b.onclick = async () => { if (!confirm(`Issue a new temporary password for ${b.dataset.reset}? Their sessions will be signed out.`)) return;
+      try { const r = await api(`/api/v1/users/${b.dataset.reset}/reset-password`, { method: "POST" }); render(); showTemp(r); } catch (e) {} });
+    document.querySelectorAll("[data-unlock]").forEach(b => b.onclick = async () => { try { await api(`/api/v1/users/${b.dataset.unlock}`, { method: "PATCH", json: { unlock: true } }); toast("Unlocked"); render(); } catch (e) {} });
+    document.querySelectorAll("[data-active]").forEach(b => b.onclick = async () => { try { await api(`/api/v1/users/${b.dataset.active}`, { method: "PATCH", json: { is_active: b.dataset.to === "true" } }); render(); } catch (e) {} });
   })}`;
 };
 

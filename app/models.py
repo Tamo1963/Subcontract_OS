@@ -32,6 +32,24 @@ class User(Base):
     roles: Mapped[list] = mapped_column(JSON, default=list)          # global roles
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     clearance: Mapped[str] = mapped_column(String(20), default="CONFIDENTIAL")
+    password_hash: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserSession(Base):
+    """Server-side session. Only a SHA-256 of the token is stored; revocable; expires."""
+    __tablename__ = "identity_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("identity_users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    client: Mapped[str] = mapped_column(String(300), default="")
 
 
 class ProjectMembership(Base):

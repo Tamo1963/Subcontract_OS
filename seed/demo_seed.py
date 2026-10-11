@@ -28,11 +28,17 @@ P101_ROLES = {"anita.contracts": ["contracts_manager"], "vikram.legal": ["legal_
               "sana.hse": ["hse_manager"], "dev.audit": ["auditor"], "ravi.registry": ["registry_manager"]}
 
 
-def create_users(db):
+def create_users(db, temporary_password: str | None = None):
+    """Create the demo users. With a temporary password, every user must change it at first sign-in."""
+    from app import auth
     from app.models import User
+    hashed = auth.hash_password(temporary_password) if temporary_password else None
     for username, name, roles, clr in USERS:
-        if not db.scalar(select(User).where(User.username == username)):
-            db.add(User(username=username, full_name=name, roles=roles, clearance=clr))
+        u = db.scalar(select(User).where(User.username == username))
+        if not u:
+            u = User(username=username, full_name=name, roles=roles, clearance=clr)
+            db.add(u)
+        u.password_hash, u.must_change_password = hashed, bool(hashed)
     db.commit()
 
 
@@ -188,16 +194,30 @@ def run(c):
 def main():
     from fastapi.testclient import TestClient
 
-    from app import config
-    from app.db import SessionLocal
-    if config.DATA_DIR.exists():
-        shutil.rmtree(config.DATA_DIR)
+    from app import auth, config, db as dbmod
     from app.main import create_app
+    if config.is_sqlite() and config.DATA_DIR.exists():
+        shutil.rmtree(config.DATA_DIR)
     app = create_app(config.DATABASE_URL)
-    with SessionLocal() as db:
-        create_users(db)
+    dbmod.reset_database()
+    shutil.rmtree(config.OBJECT_STORE_DIR, ignore_errors=True)
+    config.OBJECT_STORE_DIR.mkdir(parents=True, exist_ok=True)
+    with dbmod.SessionLocal() as db:
+        create_users(db)                       # passwords are set after loading (see below)
+    config.ALLOW_DEV_AUTH = True               # in-process only: the loader drives the API as each user
     ids = run(TestClient(app))
-    print("Demo loaded:", ids)
+    config.ALLOW_DEV_AUTH = False
+    temp = auth.temporary_password()
+    with dbmod.SessionLocal() as db:
+        create_users(db, temp)
+    creds = config.DATA_DIR / "INITIAL_CREDENTIALS.txt"
+    creds.write_text("Subcontract OS demo - temporary credentials (change at first sign-in)\n"
+                     f"Password for every demo user: {temp}\n\nUsers:\n" +
+                     "".join(f"  {u[0]:<18} {u[1]}\n" for u in USERS), encoding="utf-8")
+    db_kind = "SQLite" if config.is_sqlite() else "PostgreSQL"
+    print(f"Demo loaded into {db_kind}: {ids}")
+    print(f"\nTemporary password for ALL demo users: {temp}")
+    print(f"Saved to {creds}. Each user must change it at first sign-in.")
 
 
 if __name__ == "__main__":

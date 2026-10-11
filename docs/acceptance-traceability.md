@@ -36,5 +36,10 @@
 | AI-04 | RESTRICTED content never sent to CLOUD providers | `test_restricted_content_never_sent_*` | ✅ |
 | AI-05 | Model-drafted answers only cite retrieved sources | `test_knowledge_draft_is_citation_checked` | ✅ |
 | AI-06 | Call log holds metadata, not content | `test_call_log_holds_metadata_not_content` | ✅ |
+| SEC-03 | Temporary password must be changed before any other call | `test_temporary_password_forces_change_*` | ✅ |
+| SEC-04 | Salted password hashes; generic sign-in errors; lockout and unlock | `test_password_stored_as_salted_hash`, `test_generic_error_and_lockout` | ✅ |
+| SEC-05 | Sessions expire and are revoked on sign-out / reset; CSRF header on cookie writes | `test_logout_*`, `test_session_expiry`, `test_reset_password_*`, `test_csrf_*` | ✅ |
+| SEC-06 | Admin-only user administration; one-time temporary passwords; dev header off by default | `test_admin_creates_user_*`, `test_dev_header_rejected_*`, `test_admin_cannot_lock_*` | ✅ |
+| DB-01 | Whole suite passes on PostgreSQL 16; migrations match models (`alembic check`) | CI job `test-postgres` | ✅ |
 | WF-02/03, VAR-01/02, PAY-01 | Mobilisation, variations, payments | — | Phase 4–5 (not in MVP) |
 | REC-01 | Restore drill | — | Requires the pilot environment |
