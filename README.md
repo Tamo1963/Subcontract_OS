@@ -59,6 +59,11 @@ See [ADR-0001](docs/adr/0001-mvp-baseline.md).
 
 ## Run it
 
+**Windows:** double-click `start_windows.bat` (or run `.\start_windows.bat` in PowerShell). It creates a
+virtual environment, installs dependencies, loads the demo and opens http://localhost:8000.
+
+**Any OS:**
+
 ```bash
 pip install -r requirements.txt reportlab
 python -m seed.make_samples      # fictional pilot document pack
