@@ -40,6 +40,12 @@
 | SEC-04 | Salted password hashes; generic sign-in errors; lockout and unlock | `test_password_stored_as_salted_hash`, `test_generic_error_and_lockout` | ✅ |
 | SEC-05 | Sessions expire and are revoked on sign-out / reset; CSRF header on cookie writes | `test_logout_*`, `test_session_expiry`, `test_reset_password_*`, `test_csrf_*` | ✅ |
 | SEC-06 | Admin-only user administration; one-time temporary passwords; dev header off by default | `test_admin_creates_user_*`, `test_dev_header_rejected_*`, `test_admin_cannot_lock_*` | ✅ |
+| SSO-01 | Any OIDC provider added by configuration; secret never returned; HTTPS issuer | `test_provider_admin_*`, `test_issuer_validation`, `test_connection_test` | ✅ |
+| SSO-02 | Invited user linked once by verified e-mail; then by permanent subject; roles stay in OS | `test_invited_user_*`, `test_session_from_sso_*`, `test_unverified_email_*` | ✅ |
+| SSO-03 | Invite-only default; optional auto-create limited to allowed domains, no roles | `test_invite_only_*`, `test_auto_provision_*` | ✅ |
+| SSO-04 | State one-time and browser-bound; tampered or forged ID tokens rejected (7 cases); wrong client secret fails | `test_state_*`, `test_tampered_id_tokens_*`, `test_wrong_client_secret_*` | ✅ |
+| SSO-05 | Self-service linking (CSRF-protected); one identity per account; disabled account/provider refused | `test_signed_in_user_links_*`, `test_one_identity_*`, `test_disabled_*` | ✅ |
+| SSO-06 | Password sign-in limitable to admins (break-glass kept); last sign-in method cannot be unlinked; events audited | `test_password_login_*`, `test_cannot_unlink_*`, `test_sso_events_*` | ✅ |
 | DB-01 | Whole suite passes on PostgreSQL 16; migrations match models (`alembic check`) | CI job `test-postgres` | ✅ |
 | WF-02/03, VAR-01/02, PAY-01 | Mobilisation, variations, payments | — | Phase 4–5 (not in MVP) |
 | REC-01 | Restore drill | — | Requires the pilot environment |

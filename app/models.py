@@ -32,12 +32,59 @@ class User(Base):
     roles: Mapped[list] = mapped_column(JSON, default=list)          # global roles
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     clearance: Mapped[str] = mapped_column(String(20), default="CONFIDENTIAL")
+    email: Mapped[str | None] = mapped_column(String(254), unique=True, nullable=True)  # used to match invitations
     password_hash: Mapped[str | None] = mapped_column(String(200), nullable=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class IdentityProvider(Base):
+    """An external sign-in provider (OpenID Connect), registered by an administrator."""
+    __tablename__ = "identity_providers"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    provider_type: Mapped[str] = mapped_column(String(40))            # app.idp.catalogue key
+    issuer: Mapped[str] = mapped_column(String(500))
+    client_id: Mapped[str] = mapped_column(String(300))
+    client_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_secret_env: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    scopes: Mapped[str] = mapped_column(String(300), default="openid email profile")
+    button_label: Mapped[str] = mapped_column(String(100))
+    allowed_domains: Mapped[list] = mapped_column(JSON, default=list)
+    auto_provision: Mapped[bool] = mapped_column(Boolean, default=False)   # default: invite-only
+    trust_unverified_email: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ExternalIdentity(Base):
+    """Links a provider's permanent subject ID to one OS account (never matched on email alone after linking)."""
+    __tablename__ = "identity_external_identities"
+    __table_args__ = (UniqueConstraint("provider_id", "subject", name="uq_provider_subject"),
+                      UniqueConstraint("provider_id", "user_id", name="uq_provider_user"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    provider_id: Mapped[str] = mapped_column(ForeignKey("identity_providers.id", ondelete="CASCADE"))
+    subject: Mapped[str] = mapped_column(String(255))
+    user_id: Mapped[str] = mapped_column(ForeignKey("identity_users.id"))
+    email_at_link: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OIDCLoginState(Base):
+    """One-time state for an in-flight sign-in (state, nonce, PKCE verifier); expires in minutes."""
+    __tablename__ = "identity_oidc_states"
+    state: Mapped[str] = mapped_column(String(100), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(String(36))
+    nonce: Mapped[str] = mapped_column(String(100))
+    code_verifier: Mapped[str] = mapped_column(String(128))
+    browser_binding: Mapped[str] = mapped_column(String(64))           # sha256 of a cookie set at start
+    link_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class UserSession(Base):

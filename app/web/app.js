@@ -32,25 +32,66 @@ async function boot() {
   $("#project").onchange = (e) => { S.project = e.target.value; S.sub = null; render(); };
   document.querySelectorAll("#nav a").forEach(a => a.onclick = () => go(a.dataset.view));
   $("#logout-btn").onclick = async () => { await api("/api/v1/auth/logout", { method: "POST", quiet: true }).catch(() => {}); showLogin("Signed out."); };
-  $("#pw-btn").onclick = () => showChangePassword(false);
+  $("#pw-btn").onclick = () => showMyAccount();
   try { S.me = await api("/api/v1/me", { quiet: true }); } catch (e) { return showLogin(); }
   if (S.me.must_change_password) return showChangePassword(true);
   $("#login").classList.add("hidden");
+  if (location.hash === "#linked") { history.replaceState(null, "", "/"); toast("Company login linked to your account"); }
+  const err = hashMessage(); if (err) toast(err, true);
   $("#nav-users").classList.toggle("hidden", !S.me.roles.includes("system_admin"));
   await loadProjects();
 }
-function showLogin(msg = "") {
+const SIGNIN_ERRORS = {
+  NO_ACCOUNT: "No Subcontract OS account is set up for that login. Ask an administrator to invite you.",
+  ACCOUNT_DISABLED: "This account is disabled.", ALREADY_LINKED: "That company login is already linked to another account.",
+  BROWSER_MISMATCH: "Sign-in was started in another browser or tab. Please try again.",
+  INVALID_STATE: "That sign-in link has expired or was already used. Please try again.", STATE_EXPIRED: "Sign-in took too long. Please try again.",
+  INVALID_TOKEN: "The sign-in provider's response failed security checks.", UNKNOWN_SIGNING_KEY: "The sign-in provider's response failed security checks.",
+  TOKEN_EXCHANGE_FAILED: "The sign-in provider refused the request (check client ID/secret).", PROVIDER_DISABLED: "That sign-in option is turned off.",
+  PROVIDER_ACCESS_DENIED: "Sign-in was cancelled at the provider.", DISCOVERY_FAILED: "The sign-in provider could not be reached." };
+function hashMessage() {
+  const m = location.hash.match(/signin-error=([A-Z_]+)/);
+  if (m) { history.replaceState(null, "", "/"); return SIGNIN_ERRORS[m[1]] || `Sign-in failed (${m[1]}).`; }
+  return "";
+}
+async function showLogin(msg = "") {
   $("#login").classList.remove("hidden");
+  msg = hashMessage() || msg;
+  let opts = { providers: [], password_login: "all" };
+  try { opts = await api("/api/v1/auth/providers", { quiet: true }); } catch (e) {}
+  const pwHidden = opts.password_login === "admins_only";
   $("#login-body").innerHTML = `<h2>Sign in</h2>
-    <label>Username</label><input id="l-user" autocomplete="username" autofocus>
+    ${opts.providers.map(p => `<a class="sso-btn" href="/api/v1/auth/oidc/${encodeURIComponent(p.id)}/start">${esc(p.label)}</a>`).join("")}
+    ${opts.providers.length ? `<div class="or"><span>${pwHidden ? "administrators" : "or with username"}</span></div>` : ""}
+    <div id="pw-form" class="${pwHidden ? "hidden" : ""}">
+    <label>Username</label><input id="l-user" autocomplete="username">
     <label>Password</label><input id="l-pw" type="password" autocomplete="current-password">
-    <div class="err" id="l-err">${esc(msg)}</div><button class="primary" id="l-go">Sign in</button>
-    <p class="hint">First sign-in uses the temporary password issued by your administrator; you will be asked to set your own.</p>`;
+    <button class="primary" id="l-go">Sign in</button></div>
+    ${pwHidden ? `<a href="#" id="pw-show" class="small">Administrator sign-in with password</a>` : ""}
+    <div class="err" id="l-err">${esc(msg)}</div>
+    <p class="hint">First sign-in with a password uses the temporary password issued by your administrator; you will be asked to set your own.</p>`;
   const go = async () => {
     try { await api("/api/v1/auth/login", { method: "POST", quiet: true, json: { username: $("#l-user").value, password: $("#l-pw").value } }); boot(); }
     catch (e) { $("#l-err").textContent = e.message || "Sign-in failed"; }
   };
-  $("#l-go").onclick = go; $("#l-pw").onkeydown = (e) => e.key === "Enter" && go(); $("#l-user").focus();
+  $("#l-go").onclick = go; $("#l-pw").onkeydown = (e) => e.key === "Enter" && go();
+  $("#pw-show") && ($("#pw-show").onclick = (e) => { e.preventDefault(); $("#pw-form").classList.remove("hidden"); e.target.remove(); });
+  if (!pwHidden) $("#l-user").focus();
+}
+async function showMyAccount() {
+  const [mine, opts] = await Promise.all([api("/api/v1/me/identities"), api("/api/v1/auth/providers")]);
+  const linked = new Set(mine.map(x => x.provider_id));
+  openModal(`<h2>My sign-in</h2><p class="small muted">Signed in as <b>${esc(S.me.username)}</b>. Link a company login to sign in with it next time.</p>
+    <h3>Linked company logins</h3>${mine.length ? `<table>${mine.map(x => `<tr><td><b>${esc(x.provider)}</b><div class="small muted">${esc(x.email || "")}</div></td>
+      <td class="small mono">${esc((x.last_used_at || x.linked_at).replace("T", " ").slice(0, 16))}</td><td><button class="danger" data-unlink="${x.id}">Unlink</button></td></tr>`).join("")}</table>`
+      : `<p class="muted small">None yet.</p>`}
+    ${opts.providers.filter(p => !linked.has(p.id)).map(p => `<button data-link="${p.id}">Link: ${esc(p.label)}</button> `).join("")}
+    <h3>Password</h3><button id="my-pw">Change password</button>`);
+  document.querySelectorAll("[data-link]").forEach(b => b.onclick = async () => {
+    try { const r = await api(`/api/v1/auth/oidc/${b.dataset.link}/link`, { method: "POST" }); location.href = r.authorization_url; } catch (e) {} });
+  document.querySelectorAll("[data-unlink]").forEach(b => b.onclick = async () => {
+    try { await api(`/api/v1/me/identities/${b.dataset.unlink}`, { method: "DELETE" }); toast("Unlinked"); showMyAccount(); } catch (e) {} });
+  $("#my-pw").onclick = () => { closeModal(); showChangePassword(false); };
 }
 function showChangePassword(forced) {
   $("#login").classList.remove("hidden");
@@ -371,10 +412,10 @@ VIEWS.ai = async () => {
 };
 
 VIEWS.users = async () => {
-  const [d, log] = await Promise.all([api("/api/v1/users"), api("/api/v1/users/audit")]);
+  const [d, log, idp] = await Promise.all([api("/api/v1/users"), api("/api/v1/users/audit"), api("/api/v1/auth/identity-providers")]);
   return `<h1>Users &amp; access</h1><p class="sub">Create accounts with one-time temporary passwords, reset passwords, unlock and deactivate users. Project access is granted per project by its coordinator.</p>
-  <div class="card"><h2>Accounts</h2><table><tr><th>User</th><th>Global roles</th><th>Clearance</th><th>Status</th><th>Last sign-in</th><th></th></tr>
-  ${d.users.map(u => `<tr><td><b>${esc(u.username)}</b><div class="small muted">${esc(u.full_name)}</div></td><td class="small">${esc(u.roles.join(", ") || "—")}</td><td>${esc(u.clearance)}</td>
+  <div class="card"><h2>Accounts</h2><table><tr><th>User</th><th>E-mail (company sign-in)</th><th>Global roles</th><th>Clearance</th><th>Status</th><th>Last sign-in</th><th></th></tr>
+  ${d.users.map(u => `<tr><td><b>${esc(u.username)}</b><div class="small muted">${esc(u.full_name)}</div></td><td class="small">${esc(u.email || "—")} <a href="#" data-email="${esc(u.username)}" data-cur="${esc(u.email || "")}">edit</a></td><td class="small">${esc(u.roles.join(", ") || "—")}</td><td>${esc(u.clearance)}</td>
     <td>${u.is_active ? pill("ACTIVE", "ok") : pill("DISABLED", "bad")} ${u.locked ? pill("LOCKED", "bad") : ""} ${u.must_change_password ? pill("TEMP PASSWORD", "warn") : ""}</td>
     <td class="mono small">${esc((u.last_login_at || "never").replace("T", " ").slice(0, 16))}</td>
     <td class="row" style="flex-wrap:nowrap"><button data-reset="${esc(u.username)}">Reset password</button>${u.locked ? `<button data-unlock="${esc(u.username)}">Unlock</button>` : ""}
@@ -382,21 +423,66 @@ VIEWS.users = async () => {
   <div class="card"><h2>New user</h2><div class="form">
     <label>Username</label><input id="nu-name" placeholder="firstname.lastname">
     <label>Full name</label><input id="nu-full">
+    <label>Work e-mail</label><input id="nu-email" placeholder="invites the user to company sign-in (optional)">
     <label>Global roles</label><select id="nu-roles" multiple size="5">${d.roles.map(r => `<option>${r}</option>`).join("")}</select>
     <label>Clearance</label><select id="nu-clr">${d.clearances.map(c => `<option ${c === "CONFIDENTIAL" ? "selected" : ""}>${c}</option>`).join("")}</select></div>
     <p class="small muted">Most roles are granted per project by its coordinator (Portfolio control → Project team). Global roles are for registry, coordination and administration.</p>
     <button class="primary" id="nu-go">Create user</button></div>
+  ${idpCard(idp)}
   <div class="card"><h2>Sign-in and account events</h2><table><tr><th>When (UTC)</th><th>Actor</th><th>Event</th><th>Account</th></tr>
   ${log.map(e => `<tr><td class="mono small">${esc(e.at.replace("T", " ").slice(0, 19))}</td><td>${esc(e.actor)}</td><td class="mono small">${esc(e.action)}</td><td>${esc(e.subject)}</td></tr>`).join("")}</table></div>
   ${on(() => {
     const showTemp = (r) => openModal(`<h2>Temporary password for ${esc(r.username)}</h2><p>Shown once. Give it to the user through a secure channel; they must change it at first sign-in.</p><p class="secret">${esc(r.temporary_password)}</p>`);
     $("#nu-go").onclick = async () => { try { const r = await api("/api/v1/users", { method: "POST", json: { username: $("#nu-name").value, full_name: $("#nu-full").value,
-      roles: [...$("#nu-roles").selectedOptions].map(o => o.value), clearance: $("#nu-clr").value } }); render(); showTemp(r); } catch (e) {} };
+      roles: [...$("#nu-roles").selectedOptions].map(o => o.value), clearance: $("#nu-clr").value, email: $("#nu-email").value || null } }); render(); showTemp(r); } catch (e) {} };
+    document.querySelectorAll("[data-email]").forEach(a => a.onclick = async (ev) => { ev.preventDefault(); const v = prompt(`Work e-mail for ${a.dataset.email} (empty to clear)`, a.dataset.cur); if (v === null) return;
+      try { await api(`/api/v1/users/${a.dataset.email}`, { method: "PATCH", json: { email: v } }); toast("E-mail saved"); render(); } catch (e) {} });
+    bindIdp(idp);
     document.querySelectorAll("[data-reset]").forEach(b => b.onclick = async () => { if (!confirm(`Issue a new temporary password for ${b.dataset.reset}? Their sessions will be signed out.`)) return;
       try { const r = await api(`/api/v1/users/${b.dataset.reset}/reset-password`, { method: "POST" }); render(); showTemp(r); } catch (e) {} });
     document.querySelectorAll("[data-unlock]").forEach(b => b.onclick = async () => { try { await api(`/api/v1/users/${b.dataset.unlock}`, { method: "PATCH", json: { unlock: true } }); toast("Unlocked"); render(); } catch (e) {} });
     document.querySelectorAll("[data-active]").forEach(b => b.onclick = async () => { try { await api(`/api/v1/users/${b.dataset.active}`, { method: "PATCH", json: { is_active: b.dataset.to === "true" } }); render(); } catch (e) {} });
   })}`;
 };
+
+function idpCard(idp) {
+  return `<div class="card"><div class="row"><h2>Sign-in providers</h2><span class="spacer"></span>
+    <label class="small">Password sign-in <select id="pw-policy"><option value="all" ${idp.password_login === "all" ? "selected" : ""}>Everyone</option>
+    <option value="admins_only" ${idp.password_login === "admins_only" ? "selected" : ""}>Administrators only</option></select></label></div>
+    <p class="small muted">Any OpenID Connect provider. Accounts and roles stay here; a provider only proves identity. Invite people by setting their work e-mail above — they are linked at first company sign-in. Redirect URI to register with the provider: <span class="mono">${esc(idp.redirect_uri)}</span></p>
+    ${idp.providers.length ? `<table><tr><th>Name</th><th>Provider</th><th>Issuer</th><th>Client</th><th>Domains</th><th>New users</th><th>Linked</th><th></th></tr>
+      ${idp.providers.map(p => `<tr><td><b>${esc(p.name)}</b>${p.enabled ? "" : " " + pill("DISABLED")}<div class="small muted">${esc(p.button_label)}</div></td><td class="small">${esc(p.provider_label)}</td>
+        <td class="mono small">${esc(p.issuer)}</td><td class="small"><span class="mono">${esc(p.client_id)}</span><div class="muted">${esc(p.secret_source)}</div></td>
+        <td class="small">${esc(p.allowed_domains.join(", ") || "any")}</td><td class="small">${p.auto_provision ? "auto-create (no roles)" : "invite only"}</td><td class="mono">${p.linked_accounts}</td>
+        <td class="row" style="flex-wrap:nowrap"><button data-idtest="${p.id}">Test</button><button data-idtoggle="${p.id}" data-en="${p.enabled}">${p.enabled ? "Disable" : "Enable"}</button><button class="danger" data-iddel="${p.id}">Remove</button></td></tr>`).join("")}</table>`
+      : `<p class="muted">No providers yet — everyone signs in with username and password.</p>`}
+    <h3>Register a provider</h3><div class="form">
+      <label>Provider</label><select id="ip-type">${idp.catalogue.map(c => `<option value="${c.key}">${esc(c.label)}</option>`).join("")}</select>
+      <label>Display name</label><input id="ip-name" placeholder="e.g. Company Microsoft 365">
+      <label>Issuer URL</label><input id="ip-iss">
+      <label>Client ID</label><input id="ip-cid">
+      <label>Client secret</label><input id="ip-sec" type="password" placeholder="stored encrypted, never shown again">
+      <label>…or secret from env var</label><input id="ip-env" placeholder="e.g. SCOS_SSO_SECRET (preferred in production)">
+      <label>Button label</label><input id="ip-btn">
+      <label>Allowed e-mail domains</label><input id="ip-dom" placeholder="yourcompany.com, subsidiary.in">
+      <label>New people</label><select id="ip-auto"><option value="0">Invite only (recommended)</option><option value="1">Create account automatically — no roles until granted</option></select>
+    </div><p class="small muted" id="ip-note"></p><button class="primary" id="ip-go">Register provider</button></div>`;
+}
+function bindIdp(idp) {
+  const fill = () => { const c = idp.catalogue.find(x => x.key === $("#ip-type").value); $("#ip-iss").value = c.issuer_template; $("#ip-btn").value = c.button_label; $("#ip-note").textContent = c.note; };
+  $("#ip-type").onchange = fill; fill();
+  $("#pw-policy").onchange = async (e) => { try { await api("/api/v1/auth/policy", { method: "PUT", json: { password_login: e.target.value } }); toast("Sign-in policy saved"); } catch (er) { render(); } };
+  $("#ip-go").onclick = async () => { try { await api("/api/v1/auth/identity-providers", { method: "POST", json: { name: $("#ip-name").value, provider_type: $("#ip-type").value,
+      issuer: $("#ip-iss").value.trim(), client_id: $("#ip-cid").value.trim(), client_secret: $("#ip-sec").value || null, client_secret_env: $("#ip-env").value || null,
+      button_label: $("#ip-btn").value, allowed_domains: $("#ip-dom").value.split(",").map(x => x.trim()).filter(Boolean), auto_provision: $("#ip-auto").value === "1" } });
+      toast("Provider registered — click Test"); render(); } catch (e) {} };
+  document.querySelectorAll("[data-idtest]").forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = "Testing…";
+    const r = await api(`/api/v1/auth/identity-providers/${b.dataset.idtest}/test`, { method: "POST" }).catch(() => ({ ok: false, error: "request failed" }));
+    r.ok ? openModal(`<h2>Connection OK</h2><p>Issuer <span class="mono">${esc(r.issuer)}</span> · ${r.signing_keys} signing key(s) · PKCE ${r.pkce_s256 ? "supported" : "NOT advertised"}</p><p class="small">Register this redirect URI with the provider:</p><p class="secret">${esc(r.redirect_uri_to_register)}</p>`)
+         : toast(`Test failed: ${r.error}`, true); b.disabled = false; b.textContent = "Test"; });
+  document.querySelectorAll("[data-idtoggle]").forEach(b => b.onclick = async () => { try { await api(`/api/v1/auth/identity-providers/${b.dataset.idtoggle}`, { method: "PATCH", json: { enabled: b.dataset.en !== "true" } }); render(); } catch (e) {} });
+  document.querySelectorAll("[data-iddel]").forEach(b => b.onclick = async () => { if (!confirm("Remove this provider and unlink every account linked to it?")) return;
+    try { await api(`/api/v1/auth/identity-providers/${b.dataset.iddel}`, { method: "DELETE" }); toast("Removed"); render(); } catch (e) {} });
+}
 
 boot();

@@ -1,4 +1,5 @@
 """Sign-in, sign-out, password change and user administration."""
+import re
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -26,6 +27,23 @@ def _set_cookie(resp: Response, token: str):
                     max_age=config.SESSION_HOURS * 3600, path="/")
 
 
+def issue_session(db: Session, user: User, request: Request, response: Response, how: str) -> tuple[str, object]:
+    token, th, expires = auth.new_session_token()
+    db.add(UserSession(token_hash=th, user_id=user.id, expires_at=expires,
+                       client=(request.headers.get("user-agent") or "")[:300]))
+    user.failed_logins, user.locked_until, user.last_login_at = 0, None, auth.utcnow()
+    audit.record(db, user.id, "auth.login", "User", user.id, after={"method": how})
+    db.commit()
+    _set_cookie(response, token)
+    return token, expires
+
+
+def password_login_policy(db: Session) -> str:
+    from app.models import AppSetting
+    s = db.get(AppSetting, "auth_policy")
+    return (s.value if s else {}).get("password_login", "all")
+
+
 @router.get("/auth/config")
 def auth_config():
     return {"dev_auth": config.ALLOW_DEV_AUTH, "session_hours": config.SESSION_HOURS}
@@ -51,13 +69,12 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
         audit.record(db, user.id, "auth.login_failed", "User", user.id)
         db.commit()
         raise fail
-    token, th, expires = auth.new_session_token()
-    db.add(UserSession(token_hash=th, user_id=user.id, expires_at=expires,
-                       client=(request.headers.get("user-agent") or "")[:300]))
-    user.failed_logins, user.locked_until, user.last_login_at = 0, None, auth.utcnow()
-    audit.record(db, user.id, "auth.login", "User", user.id)
-    db.commit()
-    _set_cookie(response, token)
+    if password_login_policy(db) == "admins_only" and "system_admin" not in (user.roles or []):
+        audit.record(db, user.id, "auth.password_login_disabled", "User", user.id)
+        db.commit()
+        raise HTTPException(403, {"code": "PASSWORD_LOGIN_DISABLED",
+                                  "message": "Password sign-in is turned off; use your company sign-in"})
+    token, expires = issue_session(db, user, request, response, "password")
     out = {"username": user.username, "full_name": user.full_name, "must_change_password": user.must_change_password,
            "expires_at": expires.isoformat()}
     if body.issue_bearer_token:
@@ -106,7 +123,7 @@ def change_password(body: ChangePasswordIn, request: Request, user: User = Depen
 # ---------------------------------------------------------------- user administration
 def user_out(u: User) -> dict:
     locked = bool(u.locked_until and auth.aware(u.locked_until) > auth.utcnow())
-    return {"username": u.username, "full_name": u.full_name, "roles": u.roles, "clearance": u.clearance,
+    return {"username": u.username, "full_name": u.full_name, "email": u.email, "roles": u.roles, "clearance": u.clearance,
             "is_active": u.is_active, "must_change_password": u.must_change_password, "locked": locked,
             "has_password": bool(u.password_hash),
             "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None}
@@ -124,6 +141,23 @@ class UserIn(BaseModel):
     full_name: str = Field(min_length=2)
     roles: list[str] = []
     clearance: str = "CONFIDENTIAL"
+    email: str | None = None            # set to invite the user to company sign-in
+
+
+def _norm_email(e: str | None) -> str | None:
+    if not e:
+        return None
+    e = e.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
+        raise HTTPException(422, {"code": "INVALID_EMAIL", "message": "Enter a valid e-mail address"})
+    return e
+
+
+def _email_free(db, email, except_id=None):
+    if email:
+        other = db.scalar(select(User).where(User.email == email))
+        if other and other.id != except_id:
+            raise HTTPException(409, {"code": "DUPLICATE_EMAIL", "message": "Another account uses this e-mail"})
 
 
 def _validate(roles, clearance):
@@ -140,8 +174,10 @@ def create_user(body: UserIn, user: User = Depends(current_user), db: Session = 
     _validate(body.roles, body.clearance)
     if db.scalar(select(User).where(User.username == body.username)):
         raise HTTPException(409, {"code": "DUPLICATE_USERNAME", "message": "Username already exists"})
+    email = _norm_email(body.email)
+    _email_free(db, email)
     temp = auth.temporary_password()
-    u = User(username=body.username, full_name=body.full_name, roles=body.roles, clearance=body.clearance,
+    u = User(username=body.username, full_name=body.full_name, roles=body.roles, clearance=body.clearance, email=email,
              password_hash=auth.hash_password(temp), must_change_password=True)
     db.add(u)
     db.flush()
@@ -171,6 +207,7 @@ class UserPatch(BaseModel):
     roles: list[str] | None = None
     clearance: str | None = None
     is_active: bool | None = None
+    email: str | None = None            # "" clears it
     unlock: bool = False
 
 
@@ -188,6 +225,9 @@ def update_user(username: str, body: UserPatch, user: User = Depends(current_use
         v = getattr(body, k)
         if v is not None:
             setattr(u, k, v)
+    if body.email is not None:
+        u.email = _norm_email(body.email)
+        _email_free(db, u.email, u.id)
     if body.unlock:
         u.locked_until, u.failed_logins = None, 0
     if body.is_active is False:

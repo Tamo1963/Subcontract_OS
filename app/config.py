@@ -30,6 +30,8 @@ SESSION_HOURS = int(os.environ.get("SCOS_SESSION_HOURS", "8"))
 MAX_FAILED_LOGINS = int(os.environ.get("SCOS_MAX_FAILED_LOGINS", "5"))
 LOCKOUT_MINUTES = int(os.environ.get("SCOS_LOCKOUT_MINUTES", "15"))
 COOKIE_SECURE = os.environ.get("SCOS_COOKIE_SECURE", "0") == "1"     # set 1 behind HTTPS
+# Public address of this server (used for the OIDC redirect URI registered with sign-in providers)
+PUBLIC_BASE_URL = os.environ.get("SCOS_PUBLIC_BASE_URL", "http://localhost:8000")
 # Development-only header login (X-User). Off unless explicitly enabled; used by the test suite.
 ALLOW_DEV_AUTH = os.environ.get("SCOS_ALLOW_DEV_AUTH", "0") == "1"
 

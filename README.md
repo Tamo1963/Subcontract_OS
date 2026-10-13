@@ -105,13 +105,20 @@ Every demo user starts with the same **temporary password**, printed by the load
 | `omar.solar` | Member of P-202 only | Cross-project access is denied |
 | `sys.admin` | System administrator | Users & access, AI providers |
 
+**Company sign-in (optional, any provider):** an administrator can add Microsoft Entra ID, Google, Okta,
+Keycloak or any OpenID Connect provider in **Users & access → Sign-in providers** — no code change. People are
+invited by their work e-mail and keep the same account and roles. See
+[ADR-0005](docs/adr/0005-pluggable-sign-in-providers.md). To try it locally:
+`uvicorn seed.mock_oidc:app --port 8098`, then register issuer `http://localhost:8098`, client ID `scos-demo`,
+secret `demo-secret`, and set `anita.contracts`'s e-mail to `anita.desai@demo-epc.example`.
+
 Sessions, lockout, CSRF protection and the password policy are described in
 [ADR-0004](docs/adr/0004-authentication.md). All organisations, people and values in the demo are fictional.
 
 ## Tests
 
 ```bash
-python -m pytest -q        # 62 tests: acceptance IDs, LLM layer, authentication
+python -m pytest -q        # 85 tests: acceptance IDs, LLM layer, authentication, sign-in providers
 SCOS_TEST_DATABASE_URL=postgresql+psycopg://... python -m pytest -q   # same suite on PostgreSQL
 ```
 
@@ -135,7 +142,7 @@ docs/                  blueprint, ADRs, traceability
 
 ## Next steps (roadmap)
 
-1. Confirm the ADR-0001 decisions; enterprise SSO (OIDC) + MFA on the new session layer; backups and restore drill.
+1. Confirm the ADR-0001 decisions; register the company's sign-in provider (framework ready, ADR-0005); TOTP for local accounts; backups and restore drill.
 2. OCR for scanned contracts; email and batch intake; background worker for processing jobs.
 3. pgvector semantic stage; evaluate registered models against the labelled set before assignment.
 4. Phase 4–5 modules: mobilisation and enablers, field/QA/HSE, variations, measurement and payment.

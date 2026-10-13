@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.db import init_db
 from app.routers import auth as auth_router
-from app.routers import contracts, documents, insight, llm, obligations, registry
+from app.routers import contracts, documents, insight, llm, obligations, registry, sso
 
 WEB = Path(__file__).parent / "web"
 
@@ -31,7 +31,7 @@ def create_app(db_url: str | None = None) -> FastAPI:
         detail = exc.detail if isinstance(exc.detail, dict) else {"code": "ERROR", "message": str(exc.detail)}
         return JSONResponse(status_code=exc.status_code, content={"error": detail})
 
-    for r in (auth_router, registry, contracts, documents, obligations, insight, llm):
+    for r in (auth_router, sso, registry, contracts, documents, obligations, insight, llm):
         app.include_router(r.router)
 
     @app.get("/healthz")
