@@ -214,10 +214,10 @@ def complete(db: Session, state: str, code: str, binding: str | None) -> tuple[U
                 raise OIDCError("ALREADY_LINKED", "Your account already has a login from this provider; unlink it first")
             db.add(ExternalIdentity(provider_id=p.id, subject=subject, user_id=user.id, email_at_link=email))
             audit.record(db, user.id, "auth.identity_linked", "User", user.id, after={"provider": p.name})
-        return _finish(db, user, p, subject, "LINKED")
+        return _finish(db, user, p, subject, "LINKED", claims)
 
     if link:
-        return _finish(db, db.get(User, link.user_id), p, subject, "SIGNED_IN")
+        return _finish(db, db.get(User, link.user_id), p, subject, "SIGNED_IN", claims)
     if email and _domain_allowed(p, email):
         invited = db.scalar(select(User).where(User.email == email))
         if invited:
@@ -227,7 +227,7 @@ def complete(db: Session, state: str, code: str, binding: str | None) -> tuple[U
             db.add(ExternalIdentity(provider_id=p.id, subject=subject, user_id=invited.id, email_at_link=email))
             audit.record(db, invited.id, "auth.identity_linked_by_invitation", "User", invited.id,
                          after={"provider": p.name, "email": email})
-            return _finish(db, invited, p, subject, "LINKED_BY_INVITATION")
+            return _finish(db, invited, p, subject, "LINKED_BY_INVITATION", claims)
         if p.auto_provision:
             base = email.split("@")[0][:60]
             username = base
@@ -239,16 +239,19 @@ def complete(db: Session, state: str, code: str, binding: str | None) -> tuple[U
             db.flush()
             db.add(ExternalIdentity(provider_id=p.id, subject=subject, user_id=user.id, email_at_link=email))
             audit.record(db, user.id, "user.auto_provisioned", "User", user.id, after={"provider": p.name, "email": email})
-            return _finish(db, user, p, subject, "PROVISIONED")
+            return _finish(db, user, p, subject, "PROVISIONED", claims)
     audit.record(db, "anonymous", "auth.sso_no_account", "IdentityProvider", p.id,
                  after={"email": email, "verified_email": bool(email)})
     db.commit()
     raise OIDCError("NO_ACCOUNT", "No Subcontract OS account is set up for this login. Ask an administrator to invite you.")
 
 
-def _finish(db: Session, user: User | None, p: IdentityProvider, subject: str, outcome: str) -> tuple[User, str]:
+def _finish(db: Session, user: User | None, p: IdentityProvider, subject: str, outcome: str,
+            claims: dict) -> tuple[User, str]:
     if user is None or not user.is_active:
         raise OIDCError("ACCOUNT_DISABLED", "This account is disabled")
+    from app.idp import groups
+    groups.sync(db, user, p, claims)          # directory group -> role mapping (no-op unless enabled)
     link = db.scalar(select(ExternalIdentity).where(ExternalIdentity.provider_id == p.id,
                                                     ExternalIdentity.subject == subject))
     if link:

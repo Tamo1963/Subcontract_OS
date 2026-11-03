@@ -157,7 +157,7 @@ VIEWS.dashboard = async () => {
   <div class="card"><h2>Subcontracts</h2><table><tr><th>Number</th><th>Scope</th><th>Discipline</th><th>Value</th><th>Status</th></tr>
   ${p.subcontracts.map(s => `<tr class="click" data-sub-open="${s.id}"><td class="mono">${esc(s.subcontract_number)}</td><td>${esc(s.scope_summary)}</td><td>${esc(s.discipline)}</td><td class="mono">${esc(s.currency)} ${Number(s.contract_value).toLocaleString("en-IN")}</td><td>${pill(s.status, statusCls(s.status))}</td></tr>`).join("")}</table></div>
   <div class="card"><div class="row"><h2>Project team</h2><span class="spacer"></span><span class="small muted">Project roles are granted here by the project coordinator.</span></div>
-    <table><tr><th>User</th><th>Project roles</th><th></th></tr>${members.map(m => `<tr><td><b>${esc(m.username)}</b> <span class="small muted">${esc(m.full_name)}</span></td><td class="small">${esc(m.roles.join(", "))}</td>
+    <table><tr><th>User</th><th>Project roles</th><th></th></tr>${members.map(m => `<tr><td><b>${esc(m.username)}</b> <span class="small muted">${esc(m.full_name)}</span></td><td class="small">${esc(m.roles.join(", "))}${(m.directory_roles || []).map(r => ` <span class="pill info" title="From a directory group">${esc(r)} · directory</span>`).join("")}</td>
       <td>${isCoord ? `<button class="danger" data-rm="${esc(m.username)}">Remove</button>` : ""}</td></tr>`).join("")}</table>
     ${isCoord ? `<div class="row" style="margin-top:10px"><input id="m-user" placeholder="username"><select id="m-role">${["contracts_manager","legal_reviewer","contracts_approver","commercial_manager","qaqc_manager","hse_manager","construction_manager","project_controls","procurement_manager","auditor","registry_manager","project_coordinator"].map(r => `<option>${r}</option>`).join("")}</select><button class="primary" id="m-add">Add to project</button></div>` : ""}</div>
   <div class="card"><h2>Flow-down status</h2><p>${d.flowdown.total} source provisions mapped across subcontracts · ${d.flowdown.unresolved} without an approved disposition (${d.flowdown.unresolved_high} HIGH risk).</p>
@@ -415,7 +415,7 @@ VIEWS.users = async () => {
   const [d, log, idp] = await Promise.all([api("/api/v1/users"), api("/api/v1/users/audit"), api("/api/v1/auth/identity-providers")]);
   return `<h1>Users &amp; access</h1><p class="sub">Create accounts with one-time temporary passwords, reset passwords, unlock and deactivate users. Project access is granted per project by its coordinator.</p>
   <div class="card"><h2>Accounts</h2><table><tr><th>User</th><th>E-mail (company sign-in)</th><th>Global roles</th><th>Clearance</th><th>Status</th><th>Last sign-in</th><th></th></tr>
-  ${d.users.map(u => `<tr><td><b>${esc(u.username)}</b><div class="small muted">${esc(u.full_name)}</div></td><td class="small">${esc(u.email || "—")} <a href="#" data-email="${esc(u.username)}" data-cur="${esc(u.email || "")}">edit</a></td><td class="small">${esc(u.roles.join(", ") || "—")}</td><td>${esc(u.clearance)}</td>
+  ${d.users.map(u => `<tr><td><b>${esc(u.username)}</b><div class="small muted">${esc(u.full_name)}</div></td><td class="small">${esc(u.email || "—")} <a href="#" data-email="${esc(u.username)}" data-cur="${esc(u.email || "")}">edit</a></td><td class="small">${esc(u.roles.join(", ") || "—")}${(u.directory_roles || []).map(r => ` <span class="pill info" title="From a directory group">${esc(r)} · directory</span>`).join("")}</td><td>${esc(u.clearance)}</td>
     <td>${u.is_active ? pill("ACTIVE", "ok") : pill("DISABLED", "bad")} ${u.locked ? pill("LOCKED", "bad") : ""} ${u.must_change_password ? pill("TEMP PASSWORD", "warn") : ""}</td>
     <td class="mono small">${esc((u.last_login_at || "never").replace("T", " ").slice(0, 16))}</td>
     <td class="row" style="flex-wrap:nowrap"><button data-reset="${esc(u.username)}">Reset password</button>${u.locked ? `<button data-unlock="${esc(u.username)}">Unlock</button>` : ""}
@@ -454,7 +454,7 @@ function idpCard(idp) {
       ${idp.providers.map(p => `<tr><td><b>${esc(p.name)}</b>${p.enabled ? "" : " " + pill("DISABLED")}<div class="small muted">${esc(p.button_label)}</div></td><td class="small">${esc(p.provider_label)}</td>
         <td class="mono small">${esc(p.issuer)}</td><td class="small"><span class="mono">${esc(p.client_id)}</span><div class="muted">${esc(p.secret_source)}</div></td>
         <td class="small">${esc(p.allowed_domains.join(", ") || "any")}</td><td class="small">${p.auto_provision ? "auto-create (no roles)" : "invite only"}</td><td class="mono">${p.linked_accounts}</td>
-        <td class="row" style="flex-wrap:nowrap"><button data-idtest="${p.id}">Test</button><button data-idtoggle="${p.id}" data-en="${p.enabled}">${p.enabled ? "Disable" : "Enable"}</button><button class="danger" data-iddel="${p.id}">Remove</button></td></tr>`).join("")}</table>`
+        <td class="row" style="flex-wrap:nowrap"><button data-idgroups="${p.id}">Group roles${p.group_mappings ? ` (${p.group_mappings})` : ""}${p.sync_roles ? " ✓" : ""}</button><button data-idtest="${p.id}">Test</button><button data-idtoggle="${p.id}" data-en="${p.enabled}">${p.enabled ? "Disable" : "Enable"}</button><button class="danger" data-iddel="${p.id}">Remove</button></td></tr>`).join("")}</table>`
       : `<p class="muted">No providers yet — everyone signs in with username and password.</p>`}
     <h3>Register a provider</h3><div class="form">
       <label>Provider</label><select id="ip-type">${idp.catalogue.map(c => `<option value="${c.key}">${esc(c.label)}</option>`).join("")}</select>
@@ -468,7 +468,37 @@ function idpCard(idp) {
       <label>New people</label><select id="ip-auto"><option value="0">Invite only (recommended)</option><option value="1">Create account automatically — no roles until granted</option></select>
     </div><p class="small muted" id="ip-note"></p><button class="primary" id="ip-go">Register provider</button></div>`;
 }
+async function groupRolesModal(pid) {
+  const d = await api(`/api/v1/auth/identity-providers/${pid}/group-mappings`);
+  openModal(`<h2>Directory group → role mapping</h2><p class="small muted">${esc(d.provider)} · People in a mapped group get these roles at each company sign-in; leaving the group removes them at the next sign-in. Manually granted roles are never changed. <b>system_admin</b> can never come from a directory.</p>
+    <div class="form">
+      <label>Sync roles from groups</label><select id="gm-sync"><option value="0" ${d.sync_roles ? "" : "selected"}>Off</option><option value="1" ${d.sync_roles ? "selected" : ""}>On</option></select>
+      <label>Groups claim in the token</label><input id="gm-claim" value="${esc(d.groups_claim)}" placeholder="groups  (Keycloak: realm_access.roles)">
+      <label>Directory roles expire if no sign-in for</label><div class="row"><input id="gm-ttl" type="number" min="0" max="365" value="${d.grant_ttl_days}" style="width:90px"><span class="small muted">days (0 = never)</span></div>
+    </div><button id="gm-save">Save settings</button>
+    <h3>Mappings</h3>${d.mappings.length ? `<table><tr><th>Directory group</th><th>Scope</th><th>Roles</th><th>Users</th><th></th></tr>
+      ${d.mappings.map(m => `<tr><td><b>${esc(m.label || m.group_value)}</b>${m.label && m.label !== m.group_value ? `<div class="mono small muted">${esc(m.group_value)}</div>` : ""}</td>
+        <td>${m.project_code ? esc(m.project_code) : pill("GLOBAL", "warn")}</td><td class="small">${esc(m.roles.join(", "))}</td><td class="mono">${m.users_holding}</td>
+        <td><button class="danger" data-gmdel="${m.id}">Remove</button></td></tr>`).join("")}</table>` : `<p class="muted small">No mappings yet.</p>`}
+    <h3>Add a mapping</h3><div class="form">
+      <label>Group as sent by the provider</label><input id="gm-group" placeholder="name, path or object ID (Entra ID sends object IDs)">
+      <label>Description</label><input id="gm-label" placeholder="e.g. EPC Contracts team">
+      <label>Scope</label><select id="gm-scope"><option value="">Global — all projects</option>${d.projects.map(x => `<option value="${x.id}">Project ${esc(x.code)} — ${esc(x.name)}</option>`).join("")}</select>
+      <label>Roles</label><select id="gm-roles" multiple size="6">${d.assignable_roles.map(r => `<option>${r}</option>`).join("")}</select>
+    </div><button class="primary" id="gm-add">Add mapping</button>
+    <h3>Dry run</h3><div class="row"><input id="gm-try" style="flex:1" placeholder="groups a person is in, comma-separated"><button id="gm-preview">Show roles</button></div><div id="gm-out" class="small" style="margin-top:8px"></div>`);
+  $("#gm-save").onclick = async () => { try { await api(`/api/v1/auth/identity-providers/${pid}`, { method: "PATCH", json: { sync_roles: $("#gm-sync").value === "1",
+      groups_claim: $("#gm-claim").value.trim() || "groups", grant_ttl_days: Number($("#gm-ttl").value) } }); toast("Group sync settings saved"); groupRolesModal(pid); } catch (e) {} };
+  $("#gm-add").onclick = async () => { try { await api(`/api/v1/auth/identity-providers/${pid}/group-mappings`, { method: "POST", json: { group_value: $("#gm-group").value,
+      label: $("#gm-label").value, project_id: $("#gm-scope").value || null, roles: [...$("#gm-roles").selectedOptions].map(o => o.value) } }); toast("Mapping added"); groupRolesModal(pid); } catch (e) {} };
+  document.querySelectorAll("[data-gmdel]").forEach(b => b.onclick = async () => { if (!confirm("Remove this mapping? Roles it granted are withdrawn immediately.")) return;
+    try { const r = await api(`/api/v1/auth/group-mappings/${b.dataset.gmdel}`, { method: "DELETE" }); toast(`Removed; ${r.grants_withdrawn} role grant(s) withdrawn`); groupRolesModal(pid); } catch (e) {} });
+  $("#gm-preview").onclick = async () => { const r = await api(`/api/v1/auth/identity-providers/${pid}/group-mappings/preview`, { method: "POST",
+      json: { groups: $("#gm-try").value.split(",").map(x => x.trim()).filter(Boolean) } });
+    $("#gm-out").innerHTML = r.result.length ? r.result.map(x => `${pill(x.role, "ok")} ${x.scope === "global" ? "global" : "on " + esc(x.scope)} <span class="muted">via ${esc(x.group)}</span>`).join("<br>") : `<span class="muted">No roles — no matching mapping.</span>`; };
+}
 function bindIdp(idp) {
+  document.querySelectorAll("[data-idgroups]").forEach(b => b.onclick = () => groupRolesModal(b.dataset.idgroups));
   const fill = () => { const c = idp.catalogue.find(x => x.key === $("#ip-type").value); $("#ip-iss").value = c.issuer_template; $("#ip-btn").value = c.button_label; $("#ip-note").textContent = c.note; };
   $("#ip-type").onchange = fill; fill();
   $("#pw-policy").onchange = async (e) => { try { await api("/api/v1/auth/policy", { method: "PUT", json: { password_login: e.target.value } }); toast("Sign-in policy saved"); } catch (er) { render(); } };

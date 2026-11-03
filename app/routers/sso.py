@@ -2,14 +2,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import audit, config
 from app.db import get_db
-from app.idp import catalogue, oidc
+from app.idp import catalogue, groups, oidc
 from app.llm import secrets as keystore
-from app.models import AppSetting, ExternalIdentity, IdentityProvider, User
+from app.models import (AppSetting, DirectoryRoleGrant, ExternalIdentity, GroupRoleMapping, IdentityProvider,
+                        Project, User)
 from app.routers.auth import issue_session, password_login_policy
 from app.security import current_user, require
 
@@ -25,7 +26,10 @@ def prov_out(p: IdentityProvider, db: Session) -> dict:
             ("stored (encrypted)" if p.client_secret_encrypted else "none (public client)"),
             "scopes": p.scopes, "button_label": p.button_label, "allowed_domains": p.allowed_domains,
             "auto_provision": p.auto_provision, "trust_unverified_email": p.trust_unverified_email,
-            "enabled": p.enabled, "linked_accounts": len(links)}
+            "enabled": p.enabled, "linked_accounts": len(links),
+            "sync_roles": p.sync_roles, "groups_claim": p.groups_claim, "grant_ttl_days": p.grant_ttl_days,
+            "group_mappings": db.scalar(select(func.count()).select_from(GroupRoleMapping)
+                                        .where(GroupRoleMapping.provider_id == p.id)) or 0}
 
 
 def _err_redirect(code: str) -> RedirectResponse:
@@ -136,6 +140,9 @@ class ProviderIn(BaseModel):
     allowed_domains: list[str] = []
     auto_provision: bool = False
     trust_unverified_email: bool | None = None
+    sync_roles: bool = False
+    groups_claim: str = "groups"
+    grant_ttl_days: int = Field(default=30, ge=0, le=365)
 
 
 class ProviderPatch(BaseModel):
@@ -150,6 +157,9 @@ class ProviderPatch(BaseModel):
     auto_provision: bool | None = None
     trust_unverified_email: bool | None = None
     enabled: bool | None = None
+    sync_roles: bool | None = None
+    groups_claim: str | None = None
+    grant_ttl_days: int | None = Field(default=None, ge=0, le=365)
 
 
 def _apply_secret(p, secret, env):
@@ -189,7 +199,8 @@ def admin_create(body: ProviderIn, user: User = Depends(current_user), db: Sessi
                          client_id=body.client_id.strip(), scopes=body.scopes, button_label=body.button_label or entry[3],
                          allowed_domains=_clean_domains(body.allowed_domains), auto_provision=body.auto_provision,
                          trust_unverified_email=entry[4] if body.trust_unverified_email is None else body.trust_unverified_email,
-                         created_by=user.id)
+                         sync_roles=body.sync_roles, groups_claim=body.groups_claim.strip() or "groups",
+                         grant_ttl_days=body.grant_ttl_days, created_by=user.id)
     _apply_secret(p, body.client_secret, body.client_secret_env)
     db.add(p)
     db.flush()
@@ -211,7 +222,8 @@ def admin_update(pid: str, body: ProviderPatch, user: User = Depends(current_use
             oidc.check_url(data["issuer"])
         except oidc.OIDCError as exc:
             raise HTTPException(422, {"code": exc.code, "message": exc.message})
-    for k in ("name", "issuer", "client_id", "scopes", "button_label", "auto_provision", "trust_unverified_email", "enabled"):
+    for k in ("name", "issuer", "client_id", "scopes", "button_label", "auto_provision", "trust_unverified_email", "enabled",
+              "sync_roles", "groups_claim", "grant_ttl_days"):
         if k in data:
             setattr(p, k, data[k])
     if "allowed_domains" in data:
@@ -296,3 +308,113 @@ def admin_unlink(username: str, lid: str, user: User = Depends(current_user), db
     audit.record(db, user.id, "auth.identity_unlinked_by_admin", "User", u.id)
     db.commit()
     return {"unlinked": lid}
+
+
+# ---------------------------------------------------------------- directory group -> role mapping
+class MappingIn(BaseModel):
+    group_value: str = Field(min_length=1, max_length=300)
+    label: str = ""
+    project_id: str | None = None        # None = global roles
+    roles: list[str] = Field(min_length=1)
+
+
+def mapping_out(db: Session, m: GroupRoleMapping) -> dict:
+    proj = db.get(Project, m.project_id) if m.project_id else None
+    holders = db.scalar(select(func.count(func.distinct(DirectoryRoleGrant.user_id)))
+                        .where(DirectoryRoleGrant.mapping_id == m.id)) or 0
+    return {"id": m.id, "group_value": m.group_value, "label": m.label, "project_id": m.project_id,
+            "project_code": proj.project_code if proj else None, "scope": proj.project_code if proj else "global",
+            "roles": m.roles, "users_holding": holders}
+
+
+def _provider(db, pid) -> IdentityProvider:
+    p = db.get(IdentityProvider, pid)
+    if not p:
+        raise HTTPException(404, {"code": "NOT_FOUND", "message": "Provider not found"})
+    return p
+
+
+@router.get("/auth/identity-providers/{pid}/group-mappings")
+def list_mappings(pid: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require(db, user, "user.admin")
+    p = _provider(db, pid)
+    ms = db.scalars(select(GroupRoleMapping).where(GroupRoleMapping.provider_id == pid)
+                    .order_by(GroupRoleMapping.label, GroupRoleMapping.group_value))
+    from app.routers.auth import ALL_ROLES
+    return {"provider": p.name, "sync_roles": p.sync_roles, "groups_claim": p.groups_claim,
+            "grant_ttl_days": p.grant_ttl_days, "mappings": [mapping_out(db, m) for m in ms],
+            "assignable_roles": [r for r in ALL_ROLES if r not in groups.FORBIDDEN_FROM_DIRECTORY],
+            "projects": [{"id": x.id, "code": x.project_code, "name": x.name} for x in db.scalars(select(Project))]}
+
+
+@router.post("/auth/identity-providers/{pid}/group-mappings", status_code=201)
+def create_mapping(pid: str, body: MappingIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require(db, user, "user.admin")
+    p = _provider(db, pid)
+    from app.routers.auth import ALL_ROLES
+    bad = [r for r in body.roles if r not in ALL_ROLES]
+    if bad:
+        raise HTTPException(422, {"code": "UNKNOWN_ROLE", "message": f"Unknown roles: {bad}"})
+    if set(body.roles) & groups.FORBIDDEN_FROM_DIRECTORY:
+        raise HTTPException(422, {"code": "ROLE_NOT_DELEGABLE",
+                                  "message": "system_admin cannot come from a directory group; keep administrators local"})
+    if body.project_id and not db.get(Project, body.project_id):
+        raise HTTPException(422, {"code": "UNKNOWN_PROJECT", "message": "Project not found"})
+    dup = [m for m in db.scalars(select(GroupRoleMapping).where(GroupRoleMapping.provider_id == pid,
+                                                                GroupRoleMapping.project_id.is_(body.project_id) if body.project_id is None
+                                                                else GroupRoleMapping.project_id == body.project_id))
+           if groups.norm(m.group_value) == groups.norm(body.group_value)]
+    if dup:
+        raise HTTPException(409, {"code": "DUPLICATE_MAPPING",
+                                  "message": "This group already has a mapping for that scope; edit or remove it"})
+    m = GroupRoleMapping(provider_id=pid, group_value=body.group_value.strip(), label=body.label.strip(),
+                         project_id=body.project_id, roles=sorted(set(body.roles)), created_by=user.id)
+    db.add(m)
+    db.flush()
+    audit.record(db, user.id, "auth.group_mapping_created", "IdentityProvider", p.id, after=mapping_out(db, m))
+    db.commit()
+    return mapping_out(db, m)
+
+
+@router.delete("/auth/group-mappings/{mid}")
+def delete_mapping(mid: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Removing a mapping withdraws the roles it granted immediately."""
+    require(db, user, "user.admin")
+    m = db.get(GroupRoleMapping, mid)
+    if not m:
+        raise HTTPException(404, {"code": "NOT_FOUND", "message": "Mapping not found"})
+    before = mapping_out(db, m)
+    revoked = db.query(DirectoryRoleGrant).filter(DirectoryRoleGrant.mapping_id == mid).delete()
+    audit.record(db, user.id, "auth.group_mapping_removed", "IdentityProvider", m.provider_id,
+                 before=before, after={"grants_withdrawn": revoked})
+    db.delete(m)
+    db.commit()
+    return {"deleted": mid, "grants_withdrawn": revoked}
+
+
+class PreviewIn(BaseModel):
+    groups: list[str]
+
+
+@router.post("/auth/identity-providers/{pid}/group-mappings/preview")
+def preview_mapping(pid: str, body: PreviewIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Dry run: which roles would a person in these groups receive?"""
+    require(db, user, "user.admin")
+    return {"result": groups.preview(db, _provider(db, pid), body.groups)}
+
+
+@router.get("/users/{username}/directory-roles")
+def user_directory_roles(username: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require(db, user, "user.admin")
+    u = db.scalar(select(User).where(User.username == username))
+    if not u:
+        raise HTTPException(404, {"code": "NOT_FOUND", "message": "User not found"})
+    active = {g.id for g in groups.active_grants(db, u)}
+    rows = db.execute(select(DirectoryRoleGrant, GroupRoleMapping, IdentityProvider)
+                      .join(GroupRoleMapping, DirectoryRoleGrant.mapping_id == GroupRoleMapping.id)
+                      .join(IdentityProvider, DirectoryRoleGrant.provider_id == IdentityProvider.id)
+                      .where(DirectoryRoleGrant.user_id == u.id)).all()
+    codes = {p.id: p.project_code for p in db.scalars(select(Project))}
+    return [{"role": g.role, "scope": codes.get(g.project_id, "global") if g.project_id else "global",
+             "group": m.label or m.group_value, "provider": p.name, "active": g.id in active,
+             "refreshed_at": g.refreshed_at.isoformat()} for g, m, p in rows]

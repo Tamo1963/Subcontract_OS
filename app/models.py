@@ -57,8 +57,40 @@ class IdentityProvider(Base):
     auto_provision: Mapped[bool] = mapped_column(Boolean, default=False)   # default: invite-only
     trust_unverified_email: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Directory group -> role mapping
+    sync_roles: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    groups_claim: Mapped[str] = mapped_column(String(200), default="groups", server_default="groups")
+    grant_ttl_days: Mapped[int] = mapped_column(Integer, default=30, server_default="30")   # 0 = never expire
     created_by: Mapped[str] = mapped_column(String(36))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class GroupRoleMapping(Base):
+    """'Members of directory group X get roles Y' - globally, or on one project only."""
+    __tablename__ = "identity_group_role_mappings"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    provider_id: Mapped[str] = mapped_column(ForeignKey("identity_providers.id", ondelete="CASCADE"))
+    group_value: Mapped[str] = mapped_column(String(300))       # as the provider sends it: name, path or object ID
+    label: Mapped[str] = mapped_column(String(200), default="")  # human description, e.g. the Entra group name
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects_projects.id", ondelete="CASCADE"), nullable=True)
+    roles: Mapped[list] = mapped_column(JSON, default=list)
+    created_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class DirectoryRoleGrant(Base):
+    """A role a user holds because of a directory group. Kept apart from manually granted roles, refreshed at
+    every company sign-in, withdrawn when the group, mapping or provider goes, and expires if not refreshed."""
+    __tablename__ = "identity_directory_grants"
+    __table_args__ = (UniqueConstraint("user_id", "mapping_id", "role", name="uq_directory_grant"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("identity_users.id", ondelete="CASCADE"))
+    provider_id: Mapped[str] = mapped_column(ForeignKey("identity_providers.id", ondelete="CASCADE"))
+    mapping_id: Mapped[str] = mapped_column(ForeignKey("identity_group_role_mappings.id", ondelete="CASCADE"))
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    role: Mapped[str] = mapped_column(String(60))
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class ExternalIdentity(Base):

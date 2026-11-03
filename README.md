@@ -112,13 +112,19 @@ invited by their work e-mail and keep the same account and roles. See
 `uvicorn seed.mock_oidc:app --port 8098`, then register issuer `http://localhost:8098`, client ID `scos-demo`,
 secret `demo-secret`, and set `anita.contracts`'s e-mail to `anita.desai@demo-epc.example`.
 
+**Directory groups → roles:** on each provider, **Group roles** maps company directory groups (for example
+`EPC-Contracts`) to roles globally or on one project. Roles follow group membership at each company sign-in;
+manual roles are never changed and `system_admin` always stays local. See
+[ADR-0006](docs/adr/0006-directory-group-role-mapping.md). The test provider's people carry demo groups
+(`EPC-Contracts`, `P101-Project-Team`, `EPC-Legal`, `EPC-Engineering`).
+
 Sessions, lockout, CSRF protection and the password policy are described in
 [ADR-0004](docs/adr/0004-authentication.md). All organisations, people and values in the demo are fictional.
 
 ## Tests
 
 ```bash
-python -m pytest -q        # 85 tests: acceptance IDs, LLM layer, authentication, sign-in providers
+python -m pytest -q        # 96 tests: acceptance IDs, LLM layer, authentication, sign-in providers, directory groups
 SCOS_TEST_DATABASE_URL=postgresql+psycopg://... python -m pytest -q   # same suite on PostgreSQL
 ```
 
@@ -142,7 +148,7 @@ docs/                  blueprint, ADRs, traceability
 
 ## Next steps (roadmap)
 
-1. Confirm the ADR-0001 decisions; register the company's sign-in provider (framework ready, ADR-0005); TOTP for local accounts; backups and restore drill.
+1. Confirm the ADR-0001 decisions; register the company's sign-in provider and its group mappings (ADR-0005/0006); TOTP for local accounts; backups and restore drill.
 2. OCR for scanned contracts; email and batch intake; background worker for processing jobs.
 3. pgvector semantic stage; evaluate registered models against the labelled set before assignment.
 4. Phase 4–5 modules: mobilisation and enablers, field/QA/HSE, variations, measurement and payment.

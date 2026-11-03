@@ -20,12 +20,17 @@ import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-PEOPLE = [  # fictional directory
-    {"sub": "00u-anita-7f3a", "email": "anita.desai@demo-epc.example", "name": "Anita Desai", "email_verified": True},
-    {"sub": "00u-vikram-91c2", "email": "vikram.rao@demo-epc.example", "name": "Vikram Rao", "email_verified": True},
-    {"sub": "00u-newhire-55d1", "email": "new.engineer@demo-epc.example", "name": "New Engineer", "email_verified": True},
-    {"sub": "00u-outsider-0b9e", "email": "someone@other-company.example", "name": "Outside Person", "email_verified": True},
-    {"sub": "00u-unverified-c4d0", "email": "anita.desai@demo-epc.example", "name": "Unverified Claim", "email_verified": False},
+PEOPLE = [  # fictional directory; "groups" is what Entra ID / Okta / Keycloak put in the token
+    {"sub": "00u-anita-7f3a", "email": "anita.desai@demo-epc.example", "name": "Anita Desai", "email_verified": True,
+     "groups": ["EPC-Contracts", "P101-Project-Team"]},
+    {"sub": "00u-vikram-91c2", "email": "vikram.rao@demo-epc.example", "name": "Vikram Rao", "email_verified": True,
+     "groups": ["EPC-Legal"]},
+    {"sub": "00u-newhire-55d1", "email": "new.engineer@demo-epc.example", "name": "New Engineer", "email_verified": True,
+     "groups": ["EPC-Engineering", "P101-Project-Team"]},
+    {"sub": "00u-outsider-0b9e", "email": "someone@other-company.example", "name": "Outside Person", "email_verified": True,
+     "groups": ["Partners"]},
+    {"sub": "00u-unverified-c4d0", "email": "anita.desai@demo-epc.example", "name": "Unverified Claim", "email_verified": False,
+     "groups": []},
 ]
 
 
@@ -78,6 +83,7 @@ class MockIdP:
         claims = {"iss": self.issuer, "aud": self.client_id, "iat": now, "exp": now + 300, "nonce": grant["nonce"],
                   **grant["person"]}
         claims.update(self.overrides.get("claims", {}))
+        claims = {k: v for k, v in claims.items() if v is not None}     # an override of None drops the claim
         key = self.overrides.get("signing_key", self.key)
         alg, headers = self.overrides.get("alg", "RS256"), {"kid": self.overrides.get("kid", self.kid)}
         id_token = jwt.encode(claims, key if alg != "HS256" else "shared", algorithm=alg, headers=headers)
@@ -118,7 +124,7 @@ def _make_app():
         q = str(request.url.query)
         rows = "".join(
             f"<form method='post' action='/authorize?{html.escape(q)}'><input type='hidden' name='i' value='{i}'>"
-            f"<button>{html.escape(p['name'])}<small>{html.escape(p['email'])}"
+            f"<button>{html.escape(p['name'])}<small>{html.escape(p['email'])} · groups: {html.escape(', '.join(p['groups']) or 'none')}"
             f"{'' if p['email_verified'] else ' · e-mail NOT verified'}</small></button></form>"
             for i, p in enumerate(PEOPLE))
         return f"""<!doctype html><meta name=viewport content='width=device-width'>

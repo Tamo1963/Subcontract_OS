@@ -132,7 +132,13 @@ def user_out(u: User) -> dict:
 @router.get("/users")
 def list_users(user: User = Depends(current_user), db: Session = Depends(get_db)):
     require(db, user, "user.admin")
-    return {"users": [user_out(u) for u in db.scalars(select(User).order_by(User.username))],
+    from app.idp.groups import active_grants
+    users = []
+    for u in db.scalars(select(User).order_by(User.username)):
+        d = user_out(u)
+        d["directory_roles"] = sorted({(g.role + (" (project)" if g.project_id else "")) for g in active_grants(db, u)})
+        users.append(d)
+    return {"users": users,
             "roles": ALL_ROLES, "clearances": CLEARANCE_ORDER}
 
 

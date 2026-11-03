@@ -28,9 +28,18 @@ def sc_out(s: Subcontractor) -> dict:
 
 @router.get("/me")
 def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    ms = db.scalars(select(ProjectMembership).where(ProjectMembership.user_id == user.id))
-    return {"id": user.id, "username": user.username, "full_name": user.full_name, "roles": user.roles,
-            "clearance": user.clearance, "projects": {m.project_id: m.roles for m in ms},
+    from app.idp.groups import active_grants
+    ms = list(db.scalars(select(ProjectMembership).where(ProjectMembership.user_id == user.id)))
+    grants = active_grants(db, user)
+    projects = {m.project_id: set(m.roles) for m in ms}
+    for g in grants:
+        if g.project_id:
+            projects.setdefault(g.project_id, set()).add(g.role)
+    return {"id": user.id, "username": user.username, "full_name": user.full_name,
+            "roles": sorted(set(user.roles or []) | {g.role for g in grants if not g.project_id}),   # effective
+            "manual_roles": user.roles, "clearance": user.clearance,
+            "projects": {k: sorted(v) for k, v in projects.items()},
+            "directory_roles": [{"role": g.role, "project_id": g.project_id} for g in grants],
             "must_change_password": bool(user.must_change_password and user.password_hash)}
 
 
@@ -136,9 +145,20 @@ def add_member(pid: str, body: MemberIn, user: User = Depends(current_user), db:
 @router.get("/projects/{pid}/members")
 def list_members(pid: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     require(db, user, "project.read", pid)
+    from app.idp.groups import active_grants
+    from app.models import DirectoryRoleGrant
     rows = db.execute(select(ProjectMembership, User).join(User, ProjectMembership.user_id == User.id)
-                      .where(ProjectMembership.project_id == pid).order_by(User.username))
-    return [{"username": u.username, "full_name": u.full_name, "roles": m.roles} for m, u in rows]
+                      .where(ProjectMembership.project_id == pid)).all()
+    out = {u.id: {"username": u.username, "full_name": u.full_name, "roles": list(m.roles), "directory_roles": []}
+           for m, u in rows}
+    holders = set(db.scalars(select(DirectoryRoleGrant.user_id).where(DirectoryRoleGrant.project_id == pid)))
+    for uid in holders:
+        u = db.get(User, uid)
+        roles = sorted({g.role for g in active_grants(db, u) if g.project_id == pid})
+        if roles:
+            out.setdefault(uid, {"username": u.username, "full_name": u.full_name, "roles": [], "directory_roles": []})
+            out[uid]["directory_roles"] = roles
+    return sorted(out.values(), key=lambda x: x["username"])
 
 
 @router.delete("/projects/{pid}/members/{username}")

@@ -69,16 +69,28 @@ def current_user(request: Request, db: Session = Depends(get_db), authorization:
     return user
 
 
+def global_roles(db: Session, user: User) -> set[str]:
+    """Manually granted global roles plus active global roles from directory groups."""
+    from app.idp.groups import active_grants
+    return set(user.roles or []) | {g.role for g in active_grants(db, user) if g.project_id is None}
+
+
 def project_roles(db: Session, user: User, project_id: str) -> set[str] | None:
+    """Effective roles on a project, or None when the user has no access to it at all."""
+    from app.idp.groups import active_grants
     m = db.scalar(select(ProjectMembership).where(ProjectMembership.user_id == user.id,
                                                   ProjectMembership.project_id == project_id))
-    return None if m is None else set(m.roles) | set(user.roles)
+    grants = active_grants(db, user)
+    directory = {g.role for g in grants if g.project_id == project_id}
+    if m is None and not directory:
+        return None
+    return set(m.roles if m else []) | directory | set(user.roles or []) | {g.role for g in grants if g.project_id is None}
 
 
 def require(db: Session, user: User, action: str, project_id: str | None = None) -> None:
     allowed = PERMISSIONS[action]
     if project_id is None:
-        if not (set(user.roles) & allowed):
+        if not (global_roles(db, user) & allowed):
             raise HTTPException(403, {"code": "FORBIDDEN", "message": f"Missing permission {action}"})
         return
     roles = project_roles(db, user, project_id)
@@ -93,4 +105,6 @@ def can_see_classification(user: User, classification: str) -> bool:
 
 
 def accessible_project_ids(db: Session, user: User) -> list[str]:
-    return list(db.scalars(select(ProjectMembership.project_id).where(ProjectMembership.user_id == user.id)))
+    from app.idp.groups import active_grants
+    manual = set(db.scalars(select(ProjectMembership.project_id).where(ProjectMembership.user_id == user.id)))
+    return sorted(manual | {g.project_id for g in active_grants(db, user) if g.project_id})

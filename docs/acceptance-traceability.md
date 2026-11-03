@@ -46,6 +46,12 @@
 | SSO-04 | State one-time and browser-bound; tampered or forged ID tokens rejected (7 cases); wrong client secret fails | `test_state_*`, `test_tampered_id_tokens_*`, `test_wrong_client_secret_*` | ✅ |
 | SSO-05 | Self-service linking (CSRF-protected); one identity per account; disabled account/provider refused | `test_signed_in_user_links_*`, `test_one_identity_*`, `test_disabled_*` | ✅ |
 | SSO-06 | Password sign-in limitable to admins (break-glass kept); last sign-in method cannot be unlinked; events audited | `test_password_login_*`, `test_cannot_unlink_*`, `test_sso_events_*` | ✅ |
+| GRP-01 | Groups map to roles globally or per project; `system_admin` never delegable; admin-only configuration | `test_mapping_admin_rules`, `test_project_scoped_*`, `test_global_group_role` | ✅ |
+| GRP-02 | Leaving a group withdraws directory roles only; manual roles untouched | `test_leaving_a_group_*` | ✅ |
+| GRP-03 | Missing or overage groups claim changes nothing (audited) | `test_missing_or_overage_*` | ✅ |
+| GRP-04 | Provider disabled, mapping removed or grant not refreshed within TTL → role stops counting | `test_disabled_provider_removed_mapping_and_expiry_*` | ✅ |
+| GRP-05 | Segregation of duties still enforced for directory-granted roles | `test_segregation_of_duties_still_applies_*` | ✅ |
+| GRP-06 | Dry run; admin sees source of every directory role; nested/path/case-insensitive matching | `test_preview_dry_run`, `test_admin_sees_*`, `test_matching_is_case_insensitive_*` | ✅ |
 | DB-01 | Whole suite passes on PostgreSQL 16; migrations match models (`alembic check`) | CI job `test-postgres` | ✅ |
 | WF-02/03, VAR-01/02, PAY-01 | Mobilisation, variations, payments | — | Phase 4–5 (not in MVP) |
 | REC-01 | Restore drill | — | Requires the pilot environment |
