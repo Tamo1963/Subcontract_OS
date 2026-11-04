@@ -74,7 +74,7 @@ async function showLogin(msg = "") {
     try { await api("/api/v1/auth/login", { method: "POST", quiet: true, json: { username: $("#l-user").value, password: $("#l-pw").value } }); boot(); }
     catch (e) { $("#l-err").textContent = e.message || "Sign-in failed"; }
   };
-  $("#l-go").onclick = go; $("#l-pw").onkeydown = (e) => e.key === "Enter" && go();
+  $("#l-go").onclick = go; $("#l-pw").onkeydown = (e) => { if (e.key === "Enter") go(); };
   $("#pw-show") && ($("#pw-show").onclick = (e) => { e.preventDefault(); $("#pw-form").classList.remove("hidden"); e.target.remove(); });
   if (!pwHidden) $("#l-user").focus();
 }
@@ -345,7 +345,7 @@ VIEWS.knowledge = async () => {
         ${r.contradictions.map(c => `<div class="gate blocked"><b>Contradiction — clause ${esc(c.clause)}</b>: ${Object.entries(c.values).map(([v, src]) => `${esc(v)} days in ${esc(src.join(", "))}`).join(" vs ")}. ${esc(c.note)}</div>`).join("")}
         ${r.warnings.map(w => `<div class="gate blocked">${esc(w)}</div>`).join("")}
         <h3>Sources</h3>${r.sources.map((s, i) => `<div style="margin-bottom:10px"><div class="small mono">[S${i + 1}] ${esc(s.documentNumber)} rev ${esc(s.revision)} ${s.governing ? pill("GOVERNING", "ok") : s.approval === "NOT_APPROVED" ? pill("NOT APPROVED", "warn") : pill("SUPERSEDED")} ${s.clauseReference ? "cl. " + esc(s.clauseReference) : ""} ${s.page ? "p." + s.page : ""} ${s.cell ? esc(s.cell) : ""} · score ${s.score}</div><div class="quote">${esc(s.excerpt)}</div></div>`).join("") || `<p class="muted">None.</p>`}</div>`; };
-    $("#kgo").onclick = ask; $("#kq").onkeydown = (e) => e.key === "Enter" && ask();
+    $("#kgo").onclick = ask; $("#kq").onkeydown = (e) => { if (e.key === "Enter") ask(); };
     document.querySelectorAll("[data-try]").forEach(a => a.onclick = (e) => { e.preventDefault(); $("#kq").value = a.dataset.try; ask(); }); })}`;
 };
 
