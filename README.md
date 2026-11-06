@@ -37,7 +37,10 @@ Main-contract document → source clause → proposed flow-down → human decisi
 | Evidence | Submit → review (reviewer ≠ submitter) → reject keeps the obligation open, accept closes it; full trace endpoint | Vertical slice |
 | Knowledge query | Permission-filtered, governing-revision-aware retrieval with exact clause-reference boost; contradictions, insufficient evidence and untrusted-content warnings | §6.6 |
 | Governance | Append-only audit trail, typed errors, idempotency keys | §9.3, §10 |
+| Variations | Events → variation; notice clock from the subcontract's own clause, late/missing notice held for a recorded legal decision; entitlement with clauses; server-priced items; commercial recommendation and separate approval; contract value changes only by incorporation amendment; forecast and exposure | §5.3, VAR-01/02 |
 | Dashboard | Portfolio control: unresolved flow-downs, overdue / upcoming obligations, review queue, drill-down | Blueprint §11 |
+
+![Variations](docs/screenshots/F_variations.png)
 
 ### LLM-agnostic AI layer
 
@@ -53,7 +56,7 @@ proposal; any failure falls back to the built-in rules. See [ADR-0002](docs/adr/
 To try it without keys: `uvicorn seed.mock_llm:app --port 8099`, then register *vLLM / TGI* with
 endpoint `http://localhost:8099/v1` and any model name.
 
-Not in the MVP: mobilisation, field, QA/HSE registers, variations and payments (Phases 4–5), OCR for scans,
+Not in the MVP: mobilisation, field, QA/HSE registers and payments (Phases 4–5), OCR for scans,
 semantic (pgvector) retrieval, the enterprise identity provider, and PostgreSQL/Alembic.
 See [ADR-0001](docs/adr/0001-mvp-baseline.md).
 
@@ -97,8 +100,9 @@ Every demo user starts with the same **temporary password**, printed by the load
 | User | Role on P-101 | Try |
 |---|---|---|
 | `anita.contracts` | Contracts manager (drafter) | Flow-down matrix, obligations, evidence |
-| `vikram.legal` | Legal reviewer | Decide dispositions, approve governing revisions |
-| `meera.approver` | Contracts approver | Approve release / risk exception (SC-101-02 is blocked at the gate) |
+| `vikram.legal` | Legal reviewer | Decide dispositions, approve governing revisions; decide the late notice on VAR-002 |
+| `meera.approver` | Contracts approver | Approve release / risk exception (SC-101-02 is blocked at the gate); approve variations |
+| `kabir.commercial` | Commercial manager | Recommend variation VAR-003 for approval |
 | `arjun.qaqc`, `sana.hse` | QA/QC, HSE | Submit evidence (CONFIDENTIAL clearance) |
 | `dev.audit` | Auditor | Audit trail, traces |
 | `priya.coord` | Project coordinator | Add people to the project team |
@@ -129,7 +133,7 @@ Sessions, lockout, CSRF protection and the password policy are described in
 ## Tests
 
 ```bash
-python -m pytest -q        # 107 tests: acceptance IDs, LLM layer, authentication, sign-in providers, directory groups, authenticator app
+python -m pytest -q        # 119 tests: acceptance IDs, variations, LLM layer, authentication, sign-in providers, directory groups, authenticator app
 SCOS_TEST_DATABASE_URL=postgresql+psycopg://... python -m pytest -q   # same suite on PostgreSQL
 ```
 
@@ -156,6 +160,6 @@ docs/                  blueprint, ADRs, traceability
 1. Confirm the ADR-0001 decisions; register the company's sign-in provider and its group mappings (ADR-0005/0006); require authenticator codes for administrators (ADR-0007); backups and restore drill.
 2. OCR for scanned contracts; email and batch intake; background worker for processing jobs.
 3. pgvector semantic stage; evaluate registered models against the labelled set before assignment.
-4. Phase 4–5 modules: mobilisation and enablers, field/QA/HSE, variations, measurement and payment.
+4. Phase 4–5 modules: mobilisation and enablers, field/QA/HSE, measurement and payment (variations done — ADR-0008).
 
 Licensed under GPL-3.0 (see `LICENSE`).

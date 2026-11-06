@@ -58,5 +58,9 @@
 | MFA-04 | Policy (admins / everyone) holds password sessions at enrolment; cannot be turned off while required; company sign-in unaffected | `test_policy_requires_*`, `test_admins_only_policy_*` | ✅ |
 | MFA-05 | Turning off needs password + code; admin reset (not self) signs out everywhere; bearer tokens; passwordless accounts | `test_disable_*`, `test_admin_reset_*`, `test_bearer_token_*` | ✅ |
 | DB-01 | Whole suite passes on PostgreSQL 16; migrations match models (`alembic check`) | CI job `test-postgres` | ✅ |
-| WF-02/03, VAR-01/02, PAY-01 | Mobilisation, variations, payments | — | Phase 4–5 (not in MVP) |
+| VAR-01 | Variation without a required notice: flagged, not silently waived; clock from the subcontract's own clause; only legal/approver can record a risk decision (reason kept) | `test_VAR01_*` (4) | ✅ |
+| VAR-02 | Approved value changes the forecast only by the defined rules; contract value only via incorporation amendment; baseline untouched; omissions not netted | `test_VAR02_*` (2) | ✅ |
+| VAR-03 | Server-side valuation; segregation of duties (assessor ≠ recommender; raiser/assessor/recommender ≠ approver); state gates; access and idempotency | `test_valuation_*`, `test_segregation_*`, `test_approver_who_raised_*`, `test_state_machine_*`, `test_raise_rules_*` | ✅ |
+| WF-03 | Field event linked to variations without asserting entitlement; trace to clause, evidence and amendment | `test_events_link_to_variations_and_trace` | ✅ |
+| WF-02, PAY-01 | Mobilisation, payments | — | Phase 4–5 (payments deferred) |
 | REC-01 | Restore drill | — | Requires the pilot environment |

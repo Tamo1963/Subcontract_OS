@@ -41,6 +41,16 @@ PERMISSIONS: dict[str, set[str]] = {
     "amendment.approve": {"contracts_approver"},
     "audit.read": {"auditor", "contracts_approver", "project_coordinator"},
     "user.admin": {"system_admin"},
+    # Variations (ADR-0008)
+    "event.record": {"construction_manager", "project_coordinator", "contracts_manager", "commercial_manager",
+                     "qaqc_manager", "hse_manager", "project_controls"},
+    "variation.raise": {"contracts_manager", "commercial_manager", "construction_manager", "project_coordinator",
+                        "project_controls"},
+    "variation.assess": {"commercial_manager", "contracts_manager"},
+    "variation.recommend": {"commercial_manager"},
+    "variation.notice_risk": {"legal_reviewer", "contracts_approver"},
+    "variation.approve": {"contracts_approver"},
+    "variation.incorporate": {"contracts_manager"},
 }
 
 

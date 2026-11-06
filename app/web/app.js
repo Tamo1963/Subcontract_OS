@@ -259,12 +259,17 @@ VIEWS.dashboard = async () => {
     <table><tr><th>User</th><th>Project roles</th><th></th></tr>${members.map(m => `<tr><td><b>${esc(m.username)}</b> <span class="small muted">${esc(m.full_name)}</span></td><td class="small">${esc(m.roles.join(", "))}${(m.directory_roles || []).map(r => ` <span class="pill info" title="From a directory group">${esc(r)} · directory</span>`).join("")}</td>
       <td>${isCoord ? `<button class="danger" data-rm="${esc(m.username)}">Remove</button>` : ""}</td></tr>`).join("")}</table>
     ${isCoord ? `<div class="row" style="margin-top:10px"><input id="m-user" placeholder="username"><select id="m-role">${["contracts_manager","legal_reviewer","contracts_approver","commercial_manager","qaqc_manager","hse_manager","construction_manager","project_controls","procurement_manager","auditor","registry_manager","project_coordinator"].map(r => `<option>${r}</option>`).join("")}</select><button class="primary" id="m-add">Add to project</button></div>` : ""}</div>
+  ${d.variations ? `<div class="card"><div class="row"><h2>Variations</h2><span class="spacer"></span><a class="small" id="dash-var">Open register →</a></div>
+    <p>${d.variations.open} open · ${d.variations.awaiting_approval} awaiting approval · open additions <b class="mono">${inr(d.variations.open_exposure)}</b> · open omissions <b class="mono">${inr(d.variations.open_omissions)}</b> · approved not incorporated <b class="mono">${inr(d.variations.approved_not_incorporated)}</b></p>
+    ${d.variations.notice_alerts.length ? `<table><tr><th>No.</th><th>Variation</th><th>Notice</th></tr>${d.variations.notice_alerts.map(a => `<tr class="click" data-dvar="${a.id}"><td class="mono">${esc(a.number)}</td><td>${esc(a.title)}</td><td>${noticePill(a)} <span class="small">${esc(a.message)}</span></td></tr>`).join("")}</table>` : ""}</div>` : ""}
   <div class="card"><h2>Flow-down status</h2><p>${d.flowdown.total} source provisions mapped across subcontracts · ${d.flowdown.unresolved} without an approved disposition (${d.flowdown.unresolved_high} HIGH risk).</p>
   <p class="small muted">Obligations: ${d.obligations.total} total · ${d.obligations.open} open · ${d.obligations.closed} closed with accepted evidence. Every figure drills down to source records.</p></div>
   ${on(() => {
     $("#m-add") && ($("#m-add").onclick = async () => { try { await api(`/api/v1/projects/${S.project}/members`, { method: "POST", json: { username: $("#m-user").value.trim(), roles: [$("#m-role").value] } }); toast("Member added"); render(); } catch (e) {} });
     document.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => { if (!confirm(`Remove ${b.dataset.rm} from this project?`)) return; try { await api(`/api/v1/projects/${S.project}/members/${b.dataset.rm}`, { method: "DELETE" }); render(); } catch (e) {} });
     document.querySelectorAll("[data-ob]").forEach(r => r.onclick = () => go("obligations", { sub: r.dataset.sub, ob: r.dataset.ob }));
+    $("#dash-var") && ($("#dash-var").onclick = () => go("variations"));
+    document.querySelectorAll("[data-dvar]").forEach(r => r.onclick = () => go("variations", { vo: r.dataset.dvar, vsub: null }));
                document.querySelectorAll("[data-sub-open]").forEach(r => r.onclick = () => go("subcontracts", { sub: r.dataset.subOpen })); })}`;
 };
 
@@ -427,6 +432,182 @@ async function traceView(oid, p) {
       ${e.review_status === "SUBMITTED" ? `<div class="row"><button data-evr="${e.id}" data-d="ACCEPT">Accept &amp; close</button><button class="danger" data-evr="${e.id}" data-d="REJECT">Reject</button></div>` : ""}</div>`).join("") : `<p class="muted small">No evidence yet.</p>`}
     ${o.status !== "CLOSED" ? `<div class="row small" style="margin-top:8px"><select id="ev-rev">${revs.map(r => `<option value="${r.id}">${esc(r.label)}</option>`).join("")}</select><input id="ev-note" placeholder="note"><button class="primary" id="ev-go">Submit evidence</button></div>` : ""}`));
   return `<div class="card"><h2>Chain of evidence</h2><div class="chain">${parts.join(`<div class="arrow"></div>`)}</div></div>`;
+}
+
+// ---------------------------------------------------------------- variations (ADR-0008)
+const VAR_FLOW = ["IDENTIFIED","CLASSIFIED","NOTICE_REVIEW","ENTITLEMENT_ASSESSMENT","COST_AND_TIME_ASSESSMENT","COMMERCIAL_REVIEW","APPROVAL_PENDING","APPROVED","INCORPORATED","CLOSED"];
+const VAR_LABEL = { IDENTIFIED: "Identified", CLASSIFIED: "Classified", NOTICE_REVIEW: "Notice", ENTITLEMENT_ASSESSMENT: "Entitlement",
+  COST_AND_TIME_ASSESSMENT: "Cost & time", COMMERCIAL_REVIEW: "Commercial review", APPROVAL_PENDING: "Approval", APPROVED: "Approved",
+  INCORPORATED: "Incorporated", CLOSED: "Closed", REJECTED: "Rejected", WITHDRAWN: "Withdrawn" };
+const NOTICE_CLS = { GIVEN_ON_TIME: "ok", NOT_REQUIRED: "ok", PENDING: "info", GIVEN_LATE: "bad", MISSING_OVERDUE: "bad",
+  NO_NOTICE_CLAUSE: "warn", CLOCK_NOT_STARTED: "warn", GIVEN_NO_EVIDENCE: "warn" };
+const varCls = (s) => ({ INCORPORATED: "ok", APPROVED: "ok", CLOSED: "", REJECTED: "bad", WITHDRAWN: "", APPROVAL_PENDING: "warn" }[s] ?? "info");
+const inr = (x) => x === null || x === undefined ? "—" : Number(x).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const noticePill = (n) => pill(n.status.replaceAll("_", " ") + (n.risk_decision ? " · decided" : ""), n.at_risk ? "bad" : NOTICE_CLS[n.status] || "");
+
+VIEWS.variations = async () => {
+  const p = await api(`/api/v1/projects/${S.project}`);
+  const live = p.subcontracts.filter(s => ["EXECUTED", "ACTIVE"].includes(s.status));
+  if (S.vsub && !live.find(s => s.id === S.vsub)) S.vsub = null;
+  const d = await api(`/api/v1/projects/${S.project}/variations${S.vsub ? `?subcontract_id=${S.vsub}` : ""}`);
+  const ref = d.reference;
+  const pos = Object.entries(d.positions).filter(([k]) => !S.vsub || k === S.vsub);
+  const k = (v, l, cls = "") => `<div class="kpi ${cls}"><div class="v ${String(v).length > 6 ? "money" : ""}">${v}</div><div class="l">${l}</div></div>`;
+  const sumF = (f) => pos.reduce((a, [, x]) => a + Number(x[f]), 0);
+  const detail = S.vo && d.variations.find(v => v.id === S.vo) ? await variationDetail(S.vo, ref) : "";
+  const canRaise = (S.me.projects[S.project] || []).some(r => ["contracts_manager","commercial_manager","construction_manager","project_coordinator","project_controls"].includes(r));
+  return `<h1>Variations</h1><p class="sub">From the event to the amendment: notice clock from the subcontract's own clause, entitlement with the clause cited, priced items, separate approval — and the contract value changes only on incorporation.</p>
+  <div class="grid g5">
+    ${k(d.summary.open, "Open variations")}
+    ${k(d.summary.notice_at_risk, "Notice at risk (needs a decision)", d.summary.notice_at_risk ? "bad" : "")}
+    ${k(d.summary.awaiting_approval, "Awaiting approval", d.summary.awaiting_approval ? "warn" : "")}
+    ${k(inr(sumF("open_exposure")), "Open additions (exposure)", sumF("open_exposure") ? "warn" : "")}
+    ${k(inr(sumF("open_omissions")), "Open omissions (not netted)")}
+  </div><br>
+  <div class="tabs"><a data-vsub="" class="${S.vsub ? "" : "on"}">All active subcontracts</a>${live.map(s => `<a data-vsub="${s.id}" class="${s.id === S.vsub ? "on" : ""}">${esc(s.subcontract_number)}</a>`).join("")}</div>
+  ${pos.map(([, x]) => `<div class="card"><div class="row"><h2>Commercial position · ${esc(x.subcontract_number)}</h2><span class="spacer"></span><span class="small muted">${esc(x.currency)}</span></div>
+    <div class="ladder">
+      <div><span>Original (executed baseline)</span><b class="mono">${inr(x.original_value)}</b></div>
+      <div><span>+ Other amendments</span><b class="mono">${inr(x.other_amendments)}</b></div>
+      <div><span>+ Variations incorporated</span><b class="mono">${inr(x.variations_incorporated)}</b></div>
+      <div class="tot"><span>= Current contract value</span><b class="mono">${inr(x.current_value)}</b></div>
+      <div><span>+ Approved, not yet incorporated</span><b class="mono">${inr(x.approved_not_incorporated)}</b></div>
+      <div class="tot"><span>= Forecast final value</span><b class="mono">${inr(x.forecast_final_value)}</b></div>
+      <div class="aside"><span>Not in forecast: open additions / open omissions</span><b class="mono">${inr(x.open_exposure)} / ${inr(x.open_omissions)}</b></div>
+      <div class="aside"><span>Time: days granted / days open</span><b class="mono">${x.time.days_granted} / ${x.time.days_open}</b></div>
+    </div></div>`).join("")}
+  <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1.1fr)">
+  <div class="card"><div class="row"><h2>Register</h2><span class="spacer"></span>${canRaise ? `<button id="ev-new">Record event</button><button class="primary" id="var-new">Raise variation</button>` : ""}</div>
+    ${d.variations.length ? `<table><tr><th>No.</th><th>Variation · notice</th><th class="r">Latest estimate</th><th>Status</th></tr>
+    ${d.variations.map(v => `<tr class="click" data-vo="${v.id}" style="${v.id === S.vo ? "background:#f2f9f9" : ""}"><td class="mono">${esc(v.number)}${S.vsub ? "" : `<div class="small muted">${esc(v.subcontract_number)}</div>`}</td>
+      <td>${esc(v.title)}<div class="small muted">${esc((v.category || "unclassified").replaceAll("_", " ").toLowerCase())} · ${esc(v.initiated_by.toLowerCase())}</div><div style="margin-top:3px">${noticePill(v.notice)}</div></td><td class="mono r">${inr(v.approved_amount ?? v.estimate)}<div class="small muted">${esc(v.approved_amount ? "approved" : v.estimate_basis)}</div></td>
+      <td>${pill(VAR_LABEL[v.status], varCls(v.status))}</td></tr>`).join("")}</table>` : `<p class="muted">No variations yet.</p>`}</div>
+  <div>${detail || `<div class="card"><p class="muted">Select a variation to see its workflow, notice, valuation, evidence and history.</p></div>`}</div></div>
+  ${on(() => {
+    document.querySelectorAll("[data-vsub]").forEach(a => a.onclick = () => { S.vsub = a.dataset.vsub || null; S.vo = null; render(); });
+    document.querySelectorAll("[data-vo]").forEach(r => r.onclick = () => { S.vo = r.dataset.vo; render(); });
+    $("#var-new") && ($("#var-new").onclick = () => raiseVariationModal(live, ref));
+    $("#ev-new") && ($("#ev-new").onclick = () => recordEventModal(live, ref));
+    bindVariation();
+  })}`;
+};
+
+async function recordEventModal(live, ref) {
+  openModal(`<h2>Record a project event</h2><p class="small muted">Facts only — whether it gives entitlement is decided on a variation.</p><div class="form">
+    <label>Type</label><select id="e-type">${ref.event_types.map(t => `<option>${t}</option>`).join("")}</select>
+    <label>Date it occurred</label><input id="e-date" type="date" value="${new Date().toISOString().slice(0, 10)}">
+    <label>Subcontract</label><select id="e-sub"><option value="">(project-wide)</option>${live.map(s => `<option value="${s.id}" ${s.id === S.vsub ? "selected" : ""}>${esc(s.subcontract_number)}</option>`).join("")}</select>
+    <label>Location</label><input id="e-loc" placeholder="e.g. Pipe rack PR-3">
+    <label>What happened</label><textarea id="e-desc" rows="3"></textarea></div>
+    <button class="primary" id="e-go">Record event</button>`);
+  $("#e-go").onclick = async () => { try { const e = await api(`/api/v1/projects/${S.project}/events`, { method: "POST", json: { event_type: $("#e-type").value, occurred_on: $("#e-date").value, subcontract_id: $("#e-sub").value || null, location: $("#e-loc").value, description: $("#e-desc").value } });
+    toast(`${e.number} recorded`); closeModal(); } catch (er) {} };
+}
+async function raiseVariationModal(live, ref) {
+  const events = await api(`/api/v1/projects/${S.project}/events`);
+  openModal(`<h2>Raise a variation</h2><div class="form">
+    <label>Subcontract</label><select id="v-sub">${live.map(s => `<option value="${s.id}" ${s.id === S.vsub ? "selected" : ""}>${esc(s.subcontract_number)} — ${esc(s.scope_summary)}</option>`).join("")}</select>
+    <label>Title</label><input id="v-title" placeholder="e.g. Additional pipe supports on rack PR-2">
+    <label>Origin event</label><select id="v-ev"><option value="">(none)</option>${events.map(e => `<option value="${e.id}" data-d="${e.occurred_on}">${esc(e.number)} · ${esc(e.type)} · ${esc(e.occurred_on)} — ${esc(e.description.slice(0, 60))}</option>`).join("")}</select>
+    <label>Event date (starts notice clock)</label><input id="v-date" type="date">
+    <label>Initiated by</label><select id="v-by"><option>EPC</option><option>SUBCONTRACTOR</option><option>EMPLOYER</option></select>
+    <label>Category</label><select id="v-cat"><option value="">(classify later)</option>${ref.categories.map(c => `<option>${c}</option>`).join("")}</select>
+    <label>Instruction / reference</label><input id="v-ins" placeholder="SI-017, RFI, drawing revision…">
+    <label>Description</label><textarea id="v-desc" rows="3"></textarea>
+    <label>Claimed amount</label><input id="v-amt" inputmode="decimal" placeholder="as claimed by the subcontractor (optional)">
+    <label>Claimed days</label><input id="v-days" type="number" min="0"></div>
+    <p class="small muted">The notice period is taken from this subcontract's executed notice clause.</p>
+    <button class="primary" id="v-go">Raise</button>`);
+  $("#v-ev").onchange = (e) => { const d = e.target.selectedOptions[0].dataset.d; if (d) $("#v-date").value = d; };
+  $("#v-go").onclick = async () => { try {
+    const v = await api(`/api/v1/subcontracts/${$("#v-sub").value}/variations`, { method: "POST", json: { title: $("#v-title").value, origin_event_id: $("#v-ev").value || null,
+      event_date: $("#v-date").value || null, initiated_by: $("#v-by").value, category: $("#v-cat").value || null, instruction_reference: $("#v-ins").value,
+      description: $("#v-desc").value, claimed_amount: $("#v-amt").value || null, claimed_days: $("#v-days").value ? Number($("#v-days").value) : null } });
+    toast(`${v.number} raised — notice ${v.notice.message}`); closeModal(); S.vo = v.id; render(); } catch (e) {} };
+}
+
+let bindVariation = () => {};
+async function variationDetail(vid, ref) {
+  const v = await api(`/api/v1/variations/${vid}`);
+  const A = new Set(v.actions), n = v.notice;
+  const flow = v.status === "REJECTED" || v.status === "WITHDRAWN" ? [...VAR_FLOW.slice(0, VAR_FLOW.indexOf("APPROVAL_PENDING") + 1), v.status] : VAR_FLOW;
+  const at = flow.indexOf(v.status);
+  const stepper = `<div class="stepper">${flow.map((s, i) => `<span class="${i < at ? "done" : i === at ? "now" : ""} ${["REJECTED","WITHDRAWN"].includes(s) ? "stop" : ""}">${VAR_LABEL[s]}</span>`).join("")}</div>`;
+  const moves = [...A].filter(a => a.startsWith("to:")).map(a => a.slice(3));
+  const fwd = moves.filter(t => VAR_FLOW.indexOf(t) > VAR_FLOW.indexOf(v.status) || t === "CLOSED");
+  const back = moves.filter(t => !fwd.includes(t) && !["WITHDRAWN", "REJECTED"].includes(t));
+  const docs = A.has("evidence") || A.has("edit") ? await api(`/api/v1/projects/${S.project}/documents`) : [];
+  const revs = docs.flatMap(d => d.revisions.map(r => ({ id: r.id, label: `${d.document_number} rev ${r.revision} — ${d.title}` })));
+  const revSel = (id) => `<select id="${id}">${revs.map(r => `<option value="${r.id}">${esc(r.label)}</option>`).join("")}</select>`;
+  const money3 = [["Claimed", v.claimed_amount, v.claimed_days], ["Assessed", v.assessed_amount, v.assessed_days],
+                  ["Recommended", v.recommended_amount, v.recommended_days], ["Approved", v.approved_amount, v.approved_days]];
+  bindVariation = () => {
+    const post = (path, json, msg) => async () => { try { await api(`/api/v1/variations/${vid}/${path}`, { method: "POST", json: json() }); toast(msg); render(); } catch (e) {} };
+    document.querySelectorAll("[data-vto]").forEach(b => b.onclick = async () => {
+      const t = b.dataset.vto; let reason = null;
+      if (["WITHDRAWN", "REJECTED"].includes(t)) { reason = prompt(`Reason for ${t.toLowerCase()}`); if (!reason) return; }
+      try { await api(`/api/v1/variations/${vid}/transitions`, { method: "POST", json: { target: t, reason } }); toast(`Moved to ${VAR_LABEL[t]}`); render(); } catch (e) {} });
+    $("#vf-save") && ($("#vf-save").onclick = async () => { try { await api(`/api/v1/variations/${vid}`, { method: "PATCH", json: Object.fromEntries(
+      [["category", $("#vf-cat").value || null], ["description", $("#vf-desc").value], ["claimed_amount", $("#vf-amt").value || null],
+       ["claimed_days", $("#vf-days").value ? Number($("#vf-days").value) : null]].filter(([, x]) => x !== undefined)) }); toast("Saved"); render(); } catch (e) {} });
+    $("#vn-save") && ($("#vn-save").onclick = async () => { try { await api(`/api/v1/variations/${vid}`, { method: "PATCH", json: { notice_given_on: $("#vn-date").value || null, notice_revision_id: $("#vn-doc").value || null } }); toast("Notice recorded"); render(); } catch (e) {} });
+    $("#vr-go") && ($("#vr-go").onclick = post("notice-risk", () => ({ decision: $("#vr-dec").value, reason: $("#vr-why").value }), "Notice decision recorded"));
+    $("#ve-go") && ($("#ve-go").onclick = post("entitlement", () => ({ status: $("#ve-st").value, basis: $("#ve-basis").value, clause_references: $("#ve-cl").value.split(",").map(x => x.trim()).filter(Boolean) }), "Entitlement recorded"));
+    $("#vi-add") && ($("#vi-add").onclick = () => { $("#vi-body").insertAdjacentHTML("beforeend", itemRow({}, ref)); });
+    $("#vi-save") && ($("#vi-save").onclick = async () => { const items = [...document.querySelectorAll("#vi-body tr")].map(r => Object.fromEntries([...r.querySelectorAll("[data-f]")].map(i => [i.dataset.f, i.value])))
+      .filter(i => i.description); try { await api(`/api/v1/variations/${vid}/valuation`, { method: "PUT", json: { items, assessed_days: $("#vi-days").value ? Number($("#vi-days").value) : null } }); toast("Valuation saved"); render(); } catch (e) {} });
+    $("#vc-go") && ($("#vc-go").onclick = post("recommend", () => ({ amount: $("#vc-amt").value || null, days: $("#vc-days").value ? Number($("#vc-days").value) : null, comment: $("#vc-why").value }), "Recommended for approval"));
+    document.querySelectorAll("[data-vdec]").forEach(b => b.onclick = post("decision", () => ({ decision: b.dataset.vdec, amount: $("#vd-amt").value || null, days: $("#vd-days").value ? Number($("#vd-days").value) : null, reason: $("#vd-why").value }), `Decision recorded: ${b.dataset.vdec.toLowerCase()}`));
+    $("#vx-go") && ($("#vx-go").onclick = async () => { if (!confirm("Incorporate this approved variation? An amendment will change the subcontract value; the executed baseline stays as it is.")) return;
+      try { const r = await api(`/api/v1/variations/${vid}/incorporate`, { method: "POST" }); toast(r.amendment ? `Amendment ${r.amendment.number}: ${inr(r.amendment.old_value)} → ${inr(r.amendment.new_value)}` : "Incorporated (no value change)"); render(); } catch (e) {} });
+    $("#vv-go") && ($("#vv-go").onclick = post("evidence", () => ({ document_revision_id: $("#vv-doc").value, kind: $("#vv-kind").value, note: $("#vv-note").value }), "Evidence linked"));
+    $("#vt-go") && ($("#vt-go").onclick = async () => { const t = await api(`/api/v1/variations/${vid}/trace`);
+      openModal(`<h2>Chain of evidence · ${esc(v.number)}</h2><div class="chain">${t.edges.map(e => { const f = t.nodes.find(x => x.id === e.from), to = t.nodes.find(x => x.id === e.to);
+        return `<div class="link"><div class="k">${esc(e.type.replaceAll("_", " "))}</div>${esc(f.kind)}: ${esc(f.label)} → ${esc(to.kind)}: ${esc(to.label)}</div>`; }).join("")}</div>`); });
+  };
+  const sec = (title, body) => `<div class="vsec"><h3>${title}</h3>${body}</div>`;
+  return `<div class="card"><div class="row"><h2>${esc(v.number)} · ${esc(v.title)}</h2><span class="spacer"></span>${pill(VAR_LABEL[v.status], varCls(v.status))}</div>
+    <p class="small muted">${esc(v.subcontract_number)} · ${esc((v.category || "unclassified").replaceAll("_", " ").toLowerCase())} · initiated by ${esc(v.initiated_by.toLowerCase())}${v.instruction_reference ? " · " + esc(v.instruction_reference) : ""} · raised by ${esc(v.created_by)}</p>
+    ${stepper}
+    <p>${esc(v.description)}</p>
+    ${v.origin_event ? `<p class="small">Origin event <b class="mono">${esc(v.origin_event.number)}</b> · ${esc(v.origin_event.type)} · ${esc(v.origin_event.occurred_on)}${v.origin_event.location ? " · " + esc(v.origin_event.location) : ""} — ${esc(v.origin_event.description)}</p>` : ""}
+    <div class="row">${fwd.map(t => `<button class="primary" data-vto="${t}">→ ${VAR_LABEL[t]}</button>`).join("")}${back.map(t => `<button data-vto="${t}">← ${VAR_LABEL[t]}</button>`).join("")}
+      ${moves.includes("REJECTED") ? `<button class="danger" data-vto="REJECTED">Reject</button>` : ""}${moves.includes("WITHDRAWN") ? `<button class="danger" data-vto="WITHDRAWN">Withdraw</button>` : ""}
+      <span class="spacer"></span><button id="vt-go">Chain of evidence</button></div>
+    ${A.has("edit") && ["IDENTIFIED", "CLASSIFIED"].includes(v.status) ? sec("Classify", `<div class="form"><label>Category</label><select id="vf-cat"><option value="">(choose)</option>${ref.categories.map(c => `<option ${c === v.category ? "selected" : ""}>${c}</option>`).join("")}</select>
+      <label>Description</label><textarea id="vf-desc" rows="2">${esc(v.description)}</textarea>
+      <label>Claimed amount</label><input id="vf-amt" value="${esc(v.claimed_amount || "")}"><label>Claimed days</label><input id="vf-days" type="number" value="${v.claimed_days ?? ""}"></div><button id="vf-save">Save</button>`) : ""}
+    ${sec("Notice", `<div class="notice ${n.at_risk ? "risk" : ""}">${noticePill(n)} <span>${esc(n.message)}</span></div>
+      <p class="small muted">${v.notice_obligation ? `Clock from <b>${esc(v.notice_obligation.number)}</b> (${n.period_days} ${esc(n.day_basis.toLowerCase())} days): “${esc(v.notice_obligation.source_wording.slice(0, 220))}${v.notice_obligation.source_wording.length > 220 ? "…" : ""}”` : "No notice obligation was found on this subcontract."}</p>
+      ${n.risk_decision ? `<p class="small">Decision: <b>${esc(n.risk_decision.decision.replaceAll("_", " ").toLowerCase())}</b> by ${esc(n.risk_decision.by)} — ${esc(n.risk_decision.reason)}</p>` : ""}
+      ${A.has("edit") && ["IDENTIFIED", "CLASSIFIED", "NOTICE_REVIEW"].includes(v.status) ? `<div class="row"><label class="small">Notice given on <input id="vn-date" type="date" value="${esc(n.given_on || "")}"></label><label class="small">Notice document ${revSel("vn-doc")}</label><button id="vn-save">Record notice</button></div>` : ""}
+      ${A.has("notice_risk") && n.at_risk ? `<div class="form" style="margin-top:8px"><label>Decision</label><select id="vr-dec"><option value="PROCEED_DESPITE_NOTICE_RISK">Proceed despite notice risk</option><option value="NOTICE_NOT_REQUIRED">Notice not required</option></select>
+        <label>Reason (recorded)</label><textarea id="vr-why" rows="2" placeholder="Why proceeding is acceptable; this does not waive any right"></textarea></div><button class="primary" id="vr-go">Record decision</button>` : ""}
+      ${A.has("notice_risk") && n.status === "PENDING" ? `<p class="small muted">Not expired yet. If no notice applies (e.g. an EPC-instructed omission) record that: <select id="vr-dec"><option value="NOTICE_NOT_REQUIRED">Notice not required</option></select> <input id="vr-why" placeholder="reason"> <button id="vr-go">Record</button></p>` : ""}`)}
+    ${sec("Entitlement", `<p>${pill(v.entitlement_status.replaceAll("_", " "), { ENTITLED: "ok", PARTIALLY_ENTITLED: "warn", NOT_ENTITLED: "bad", DISPUTED: "bad" }[v.entitlement_status] || "")}
+      ${v.entitlement_clauses.length ? ` clauses <span class="mono">${esc(v.entitlement_clauses.join(", "))}</span>` : ""}</p>${v.entitlement_basis ? `<p class="small">${esc(v.entitlement_basis)}</p>` : ""}
+      ${A.has("entitlement") ? `<div class="form"><label>Status</label><select id="ve-st">${ref.entitlement.slice(1).map(e => `<option>${e}</option>`).join("")}</select>
+        <label>Clauses (comma-separated)</label><input id="ve-cl" placeholder="e.g. 13.1" value="${esc(v.entitlement_clauses.join(", "))}">
+        <label>Basis</label><textarea id="ve-basis" rows="2">${esc(v.entitlement_basis)}</textarea></div><button class="primary" id="ve-go">Record entitlement</button>` : ""}`)}
+    ${sec("Valuation", `${A.has("valuation") ? `<table class="items"><thead><tr><th>Description</th><th>Cost type</th><th>Basis</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Rate ref.</th></tr></thead><tbody id="vi-body">${(v.items.length ? v.items : [{}]).map(i => itemRow(i, ref)).join("")}</tbody></table>
+        <div class="row"><button id="vi-add">+ Line</button><label class="small">Assessed days <input id="vi-days" type="number" min="0" style="width:80px" value="${v.assessed_days ?? ""}"></label><span class="spacer"></span><button class="primary" id="vi-save">Save valuation</button></div>
+        <p class="small muted">Amounts are calculated by the system (quantity × rate, rounded to the paisa). Negative quantities only for omissions.</p>`
+      : v.items.length ? `<table><tr><th>#</th><th>Description</th><th>Basis</th><th class="r">Qty</th><th>Unit</th><th class="r">Rate</th><th class="r">Amount</th></tr>${v.items.map(i => `<tr><td class="mono">${i.line_no}</td><td>${esc(i.description)}<div class="small muted">${esc(i.cost_type.toLowerCase())}${i.rate_reference ? " · " + esc(i.rate_reference) : ""}</div></td><td class="small">${esc(i.pricing_basis.replaceAll("_", " ").toLowerCase())}</td><td class="mono r">${esc(i.quantity)}</td><td>${esc(i.unit)}</td><td class="mono r">${inr(i.rate)}</td><td class="mono r">${inr(i.amount)}</td></tr>`).join("")}</table>` : `<p class="small muted">Not priced yet.</p>`}
+      <table class="ladder2"><tr><th></th>${money3.map(([l]) => `<th class="r">${l}</th>`).join("")}</tr><tr><td class="small muted">Amount (${esc(v.currency)})</td>${money3.map(([, a]) => `<td class="mono r">${inr(a)}</td>`).join("")}</tr><tr><td class="small muted">Days</td>${money3.map(([, , dd]) => `<td class="mono r">${dd ?? "—"}</td>`).join("")}</tr></table>
+      ${A.has("recommend") ? `<div class="form"><label>Recommend amount</label><input id="vc-amt" placeholder="${esc(v.assessed_amount || "")}"><label>Days</label><input id="vc-days" type="number" placeholder="${v.assessed_days ?? ""}"><label>Comment</label><textarea id="vc-why" rows="2" placeholder="required if different from the assessment"></textarea></div><button class="primary" id="vc-go">Recommend for approval</button>` : ""}
+      ${A.has("decide") ? `<div class="form"><label>Approve amount</label><input id="vd-amt" placeholder="${esc(v.recommended_amount || "")}"><label>Days</label><input id="vd-days" type="number" placeholder="${v.recommended_days ?? ""}"><label>Reason</label><textarea id="vd-why" rows="2" placeholder="required to reject, return, or approve a different value"></textarea></div>
+        <div class="row"><button class="primary" data-vdec="APPROVE">Approve</button><button data-vdec="RETURN">Return to commercial</button><button class="danger" data-vdec="REJECT">Reject</button></div>` : ""}
+      ${v.decided_by ? `<p class="small">Decided by <b>${esc(v.decided_by)}</b> on ${esc((v.decided_at || "").slice(0, 10))}${v.decision_reason ? ` — ${esc(v.decision_reason)}` : ""}</p>` : ""}
+      ${A.has("incorporate") ? `<button class="primary" id="vx-go">Incorporate by amendment</button>` : ""}`)}
+    ${sec("Evidence", `${v.evidence.length ? `<table>${v.evidence.map(e => `<tr><td>${pill(e.kind)}</td><td class="mono small">${esc(e.document_number)} rev ${esc(e.revision)}</td><td class="small">${esc(e.title)}${e.note ? ` — ${esc(e.note)}` : ""}</td></tr>`).join("")}</table>` : `<p class="small muted">None linked.</p>`}
+      ${A.has("evidence") ? `<div class="row">${revSel("vv-doc")}<select id="vv-kind">${ref.evidence_kinds.map(x => `<option>${x}</option>`).join("")}</select><input id="vv-note" placeholder="note"><button id="vv-go">Link</button></div>` : ""}`)}
+    ${sec("History", `<table>${v.history.map(h => `<tr><td class="mono small" style="white-space:nowrap">${esc(h.at.replace("T", " ").slice(0, 16))}</td><td class="small">${esc(h.actor)}</td><td class="mono small">${esc(h.action.replace("variation.", ""))}${h.after?.status ? " → " + esc(h.after.status) : ""}</td><td class="small muted">${esc(h.reason || "")}</td></tr>`).join("")}</table>`)}
+  </div>`;
+}
+function itemRow(i, ref) {
+  const sel = (f, opts, cur) => `<select data-f="${f}">${opts.map(o => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+  return `<tr><td><input data-f="description" value="${esc(i.description || "")}"></td><td>${sel("cost_type", ref.cost_types, i.cost_type || "SUBCONTRACT")}</td><td>${sel("pricing_basis", ref.pricing_bases, i.pricing_basis || "CONTRACT_RATE")}</td>
+    <td><input data-f="quantity" style="width:80px" value="${esc(i.quantity || "")}"></td><td><input data-f="unit" style="width:60px" value="${esc(i.unit || "")}"></td><td><input data-f="rate" style="width:110px" value="${esc(i.rate || "")}"></td><td><input data-f="rate_reference" style="width:110px" value="${esc(i.rate_reference || "")}"></td></tr>`;
 }
 
 VIEWS.knowledge = async () => {

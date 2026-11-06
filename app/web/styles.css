@@ -86,3 +86,16 @@ pre{background:#f4f6f8;border-radius:6px;padding:10px;font-size:11.5px;overflow:
 .qr{display:grid;place-items:center;margin:8px 0}.qr svg{width:190px;height:190px}
 .codes{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;background:#f6f8fa;border:1px solid var(--line,#e5e7eb);border-radius:8px;padding:12px 16px;margin:10px 0;font-size:14px;letter-spacing:.5px}
 .login-card .row button{width:auto;margin-top:0}
+.ladder{display:grid;grid-template-columns:1fr;gap:0;max-width:640px}
+.ladder>div{display:flex;justify-content:space-between;padding:6px 2px;border-bottom:1px dashed var(--line)}
+.ladder .tot{font-weight:600;border-bottom:1px solid var(--ink-2)} .ladder .aside{color:var(--muted);font-size:13px}
+.stepper{display:flex;flex-wrap:wrap;gap:4px;margin:10px 0}
+.stepper span{font-size:11px;padding:4px 9px;border-radius:999px;background:var(--line-2);color:var(--muted)}
+.stepper .done{background:var(--accent-soft);color:var(--accent)} .stepper .now{background:var(--accent);color:#fff;font-weight:600}
+.stepper .stop.now{background:var(--high)}
+.vsec{border-top:1px solid var(--line);margin-top:14px;padding-top:4px} .vsec h3{margin:8px 0}
+.notice{display:flex;gap:8px;align-items:center;padding:8px 10px;border-radius:8px;background:var(--line-2)} .notice.risk{background:var(--high-soft)}
+table.items input,table.items select{width:100%;padding:5px 6px;font-size:13px}
+.ladder2{margin:10px 0} td.r,th.r{text-align:right}
+td.mono,td.r,.ladder2 td{white-space:nowrap}
+.kpi .v.money{font-size:21px;line-height:34px}

@@ -18,13 +18,15 @@ USERS = [  # username, full name, global roles, clearance
     ("anita.contracts", "Anita Desai - Contracts Manager", [], "RESTRICTED"),
     ("vikram.legal", "Vikram Rao - Legal Reviewer", [], "RESTRICTED"),
     ("meera.approver", "Meera Iyer - Contracts Approver", [], "RESTRICTED"),
+    ("kabir.commercial", "Kabir Shah - Commercial Manager", [], "RESTRICTED"),
     ("arjun.qaqc", "Arjun Mehta - QA/QC Manager", [], "CONFIDENTIAL"),
     ("sana.hse", "Sana Khan - HSE Manager", [], "CONFIDENTIAL"),
     ("dev.audit", "Dev Patel - Auditor", [], "RESTRICTED"),
     ("omar.solar", "Omar Sheikh - Solar project team", [], "CONFIDENTIAL"),
 ]
 P101_ROLES = {"anita.contracts": ["contracts_manager"], "vikram.legal": ["legal_reviewer"],
-              "meera.approver": ["contracts_approver"], "arjun.qaqc": ["qaqc_manager"],
+              "meera.approver": ["contracts_approver"], "kabir.commercial": ["commercial_manager"],
+              "arjun.qaqc": ["qaqc_manager"],
               "sana.hse": ["hse_manager"], "dev.audit": ["auditor"], "ravi.registry": ["registry_manager"]}
 
 
@@ -166,7 +168,7 @@ def run(c):
     if "HSE" in by_type:
         ok(c.post(f"/api/v1/obligations/{by_type['HSE']['id']}/evidence", headers=H("sana.hse"),
                   json={"document_revision_id": hse["revision_id"], "note": "HSE plan rev 0 submitted"}))
-    upload(c, "anita.contracts", pid, SAMPLES / "LTR-SC-0042_Correspondence.txt", "LTR-SC-0042", "0", "CORRESPONDENCE",
+    ltr = upload(c, "anita.contracts", pid, SAMPLES / "LTR-SC-0042_Correspondence.txt", "LTR-SC-0042", "0", "CORRESPONDENCE",
            title="Letter: delayed work front PR-3", subcontract_id=sc1["id"], source_party="SUBCONTRACTOR")
     ok(c.post(f"/api/v1/subcontracts/{sc1['id']}/obligations", headers=H("anita.contracts"), json={
         "statement": "Internal review of monthly payment application within 5 days of receipt",
@@ -174,6 +176,7 @@ def run(c):
     am = ok(c.post(f"/api/v1/subcontracts/{sc1['id']}/amendments", headers=H("anita.contracts"), json={
         "field": "contract_value", "new_value": "126850000.00", "reason": "Amendment 1: added supports scope (VO-001)"}))
     ok(c.post(f"/api/v1/amendments/{am['id']}/approve", headers=H("meera.approver")))
+    seed_variations(c, pid, sc1["id"], ltr["revision_id"])
 
     # Subcontract SC-101-02 (civil): stuck at the release gate --------------
     sc2 = ok(c.post("/api/v1/subcontracts", headers=H("anita.contracts"), json={
@@ -189,6 +192,82 @@ def run(c):
         ok(c.post(f"/api/v1/subcontracts/{sc2['id']}/transitions", headers=H("anita.contracts"), json={"target": target}))
     return {"project_id": pid, "main_contract_id": mcid, "sc1": sc1["id"], "sc2": sc2["id"], "p202": p202["id"],
             "shakti": shakti["id"]}
+
+
+def seed_variations(c, pid, sc, ltr_rev):
+    """Three variations at different stages (ADR-0008). Dates are relative to today so the notice clocks live."""
+    H = lambda u: {"X-User": u}   # noqa: E731
+    day = lambda n: (date.today() - timedelta(days=n)).isoformat()  # noqa: E731
+    V = lambda vid, who, path, **kw: ok(c.post(f"/api/v1/variations/{vid}/{path}", headers=H(who), **kw))  # noqa: E731
+    to = lambda vid, who, target: V(vid, who, "transitions", json={"target": target})  # noqa: E731
+
+    # VAR-001: design change, notice on time, valued, approved and incorporated (Amendment 2)
+    ev1 = ok(c.post(f"/api/v1/projects/{pid}/events", headers=H("arjun.qaqc"), json={
+        "event_type": "DESIGN_CHANGE", "occurred_on": day(40), "location": "Pipe rack PR-2", "subcontract_id": sc,
+        "description": "IFC revision C of the PR-2 pipe-rack drawings adds 42 type-B pipe supports."}))
+    v1 = ok(c.post(f"/api/v1/subcontracts/{sc}/variations", headers={**H("anita.contracts"), "Idempotency-Key": "seed-var-001"},
+                   json={"title": "Additional pipe supports on rack PR-2", "origin_event_id": ev1["id"],
+                         "category": "DESIGN_CHANGE", "instruction_reference": "IFC rev C, DWG PR2-ST-004",
+                         "description": "42 type-B supports added by IFC revision C; not in the tender drawings.",
+                         "claimed_amount": "720000.00", "claimed_days": 6}))
+    ntc = upload(c, "anita.contracts", pid, SAMPLES / "NTC-SC-0051_Variation_Notice.txt", "NTC-SC-0051", "0",
+                 "CORRESPONDENCE", title="Notice of variation: PR-2 supports", subcontract_id=sc,
+                 source_party="SUBCONTRACTOR")
+    ok(c.post(f"/api/v1/revisions/{ntc['revision_id']}/approve", headers=H("vikram.legal"), json={}))
+    to(v1["id"], "anita.contracts", "CLASSIFIED")
+    ok(c.patch(f"/api/v1/variations/{v1['id']}", headers=H("anita.contracts"),
+               json={"notice_given_on": day(34), "notice_revision_id": ntc["revision_id"]}))
+    for t in ("NOTICE_REVIEW", "ENTITLEMENT_ASSESSMENT"):
+        to(v1["id"], "anita.contracts", t)
+    V(v1["id"], "anita.contracts", "entitlement", json={
+        "status": "ENTITLED", "clause_references": ["13.1"],
+        "basis": "Change to the issued-for-construction drawings is a variation instructed by the Contractor."})
+    to(v1["id"], "anita.contracts", "COST_AND_TIME_ASSESSMENT")
+    c.put(f"/api/v1/variations/{v1['id']}/valuation", headers=H("anita.contracts"), json={"assessed_days": 4, "items": [
+        {"description": "Fabricate and erect type-B pipe supports", "cost_type": "SUBCONTRACT",
+         "pricing_basis": "CONTRACT_RATE", "quantity": "42", "unit": "nos", "rate": "14250.50", "rate_reference": "BOQ 3.12"},
+        {"description": "Scaffolding at height for support erection", "cost_type": "PRELIMINARIES",
+         "pricing_basis": "QUOTATION", "quantity": "1", "unit": "LS", "rate": "55000.00",
+         "rate_reference": "Quotation Q-778"}]}).raise_for_status()
+    to(v1["id"], "anita.contracts", "COMMERCIAL_REVIEW")
+    V(v1["id"], "kabir.commercial", "recommend", json={
+        "amount": "640000.00", "days": 4, "comment": "Scaffolding quotation above market; reduced to the schedule-of-rates level."})
+    V(v1["id"], "meera.approver", "decision", json={"decision": "APPROVE", "reason": "As recommended."})
+    V(v1["id"], "anita.contracts", "incorporate")
+
+    # VAR-002: standing time at PR-3, notice given LATE -> held at notice review for legal
+    ev2 = ok(c.post(f"/api/v1/projects/{pid}/events", headers=H("anita.contracts"), json={
+        "event_type": "ACCESS_DELAY", "occurred_on": day(45), "location": "Pipe rack PR-3", "subcontract_id": sc,
+        "source_revision_id": ltr_rev,
+        "description": "Work front PR-3 not released on the planned date; civil foundations incomplete."}))
+    v2 = ok(c.post(f"/api/v1/subcontracts/{sc}/variations", headers=H("anita.contracts"), json={
+        "title": "Standing time - work front PR-3 not released", "origin_event_id": ev2["id"],
+        "initiated_by": "SUBCONTRACTOR", "category": "ACCESS_DELAY",
+        "description": "Subcontractor claims crew and equipment standing time while PR-3 was unavailable.",
+        "claimed_amount": "1240000.00", "claimed_days": 12}))
+    to(v2["id"], "anita.contracts", "CLASSIFIED")
+    ok(c.patch(f"/api/v1/variations/{v2['id']}", headers=H("anita.contracts"),
+               json={"notice_given_on": day(14), "notice_revision_id": ltr_rev}))
+    to(v2["id"], "anita.contracts", "NOTICE_REVIEW")
+
+    # VAR-003: EPC-instructed omission; notice not applicable (legal), priced, awaiting commercial recommendation
+    v3 = ok(c.post(f"/api/v1/subcontracts/{sc}/variations", headers=H("anita.contracts"), json={
+        "title": "Omit insulation on line 6-P-1104", "category": "SCOPE_OMISSION", "event_date": day(10),
+        "instruction_reference": "Site instruction SI-017",
+        "description": "Process change: line 6-P-1104 no longer needs hot insulation; scope omitted by SI-017."}))
+    to(v3["id"], "anita.contracts", "CLASSIFIED")
+    to(v3["id"], "anita.contracts", "NOTICE_REVIEW")
+    V(v3["id"], "vikram.legal", "notice-risk", json={
+        "decision": "NOTICE_NOT_REQUIRED", "reason": "EPC-instructed omission; no subcontractor claim notice applies."})
+    to(v3["id"], "anita.contracts", "ENTITLEMENT_ASSESSMENT")
+    V(v3["id"], "anita.contracts", "entitlement", json={
+        "status": "ENTITLED", "clause_references": ["13.1"],
+        "basis": "The Contractor may omit work by instruction; valued at contract rates."})
+    to(v3["id"], "anita.contracts", "COST_AND_TIME_ASSESSMENT")
+    c.put(f"/api/v1/variations/{v3['id']}/valuation", headers=H("anita.contracts"), json={"items": [
+        {"description": "Hot insulation, 6-inch line, omitted", "cost_type": "SUBCONTRACT", "pricing_basis": "CONTRACT_RATE",
+         "quantity": "-180", "unit": "m", "rate": "1850.00", "rate_reference": "BOQ 7.04"}]}).raise_for_status()
+    to(v3["id"], "anita.contracts", "COMMERCIAL_REVIEW")
 
 
 def main():

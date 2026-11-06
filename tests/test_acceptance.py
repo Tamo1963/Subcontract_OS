@@ -314,11 +314,14 @@ def test_IDEM02_obligation_generation_is_idempotent(client, world):
 
 def test_AUD01_amendment_keeps_original_actor_reason_and_values(client, world):
     s = client.get(f"/api/v1/subcontracts/{world['sc1']}", headers=H("anita.contracts")).json()
-    assert s["contract_value"] == "126850000.00" and s["baseline"]["contract_value"] == "125000000.00"
+    # Amendment 1 (direct, 1,850,000) then Amendment 2 from incorporating approved variation VAR-001 (640,000)
+    assert s["contract_value"] == "127490000.00" and s["baseline"]["contract_value"] == "125000000.00"
     ev = client.get(f"/api/v1/audit-events?project_id={world['project_id']}", headers=H("dev.audit")).json()
-    a = [e for e in ev if e["action"] == "amendment.approved"][0]
+    a = [e for e in ev if e["action"] == "amendment.approved" and "VO-001" in (e["reason"] or "")][0]
     assert a["actor"] == "meera.approver" and a["before"] == {"contract_value": "125000000.00"}
-    assert a["after"]["contract_value"] == "126850000.00" and "VO-001" in a["reason"]
+    assert a["after"]["contract_value"] == "126850000.00"
+    v = [e for e in ev if e["action"] == "amendment.approved" and "VAR-001" in (e["reason"] or "")][0]
+    assert v["before"] == {"contract_value": "126850000.00"} and v["after"]["contract_value"] == "127490000.00"
     assert client.get(f"/api/v1/audit-events?project_id={world['project_id']}",
                       headers=H("arjun.qaqc")).status_code == 403
 

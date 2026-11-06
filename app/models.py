@@ -420,6 +420,102 @@ class EvidenceLink(Base):
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+# ---------------------------------------------------------------- execution events and variations (ADR-0008)
+class ProjectEvent(Base):
+    """A dated field or commercial event (instruction, access delay, site condition...). Facts only:
+    whether it gives rise to entitlement is decided on a Variation, never here."""
+    __tablename__ = "execution_project_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects_projects.id"), index=True)
+    subcontract_id: Mapped[str | None] = mapped_column(ForeignKey("contracts_subcontracts.id"), nullable=True)
+    event_number: Mapped[str] = mapped_column(String(20))
+    event_type: Mapped[str] = mapped_column(String(30))
+    occurred_on: Mapped[str] = mapped_column(String(10))        # ISO date the event happened (or became known)
+    location: Mapped[str] = mapped_column(String(200), default="")
+    description: Mapped[str] = mapped_column(Text)
+    source_revision_id: Mapped[str | None] = mapped_column(ForeignKey("documents_revisions.id"), nullable=True)
+    recorded_by: Mapped[str] = mapped_column(String(36))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Variation(Base):
+    __tablename__ = "commercial_variations"
+    __table_args__ = (UniqueConstraint("subcontract_id", "variation_number"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects_projects.id"), index=True)
+    subcontract_id: Mapped[str] = mapped_column(ForeignKey("contracts_subcontracts.id"), index=True)
+    variation_number: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(300))
+    description: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    initiated_by: Mapped[str] = mapped_column(String(20), default="EPC")          # EPC | SUBCONTRACTOR | EMPLOYER
+    origin_event_id: Mapped[str | None] = mapped_column(ForeignKey("execution_project_events.id"), nullable=True)
+    instruction_reference: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(30), default="IDENTIFIED")
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    # Notice (VAR-01): the clock comes from the subcontract's flowed-down notice obligation
+    notice_obligation_id: Mapped[str | None] = mapped_column(ForeignKey("obligations_obligations.id"), nullable=True)
+    notice_period_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notice_day_basis: Mapped[str] = mapped_column(String(20), default="CALENDAR")
+    notice_clock_start: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    notice_due_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    notice_given_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    notice_revision_id: Mapped[str | None] = mapped_column(ForeignKey("documents_revisions.id"), nullable=True)
+    notice_risk_decision: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # who accepted a late/missing notice, why
+    # Entitlement
+    entitlement_status: Mapped[str] = mapped_column(String(20), default="NOT_ASSESSED")
+    entitlement_basis: Mapped[str] = mapped_column(Text, default="")
+    entitlement_clauses: Mapped[list] = mapped_column(JSON, default=list)
+    # Value ladder: kept separate, never overwritten by one another
+    claimed_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    assessed_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    recommended_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    approved_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    claimed_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assessed_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recommended_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    approved_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    assessed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    recommended_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_reason: Mapped[str] = mapped_column(Text, default="")
+    amendment_id: Mapped[str | None] = mapped_column(ForeignKey("contracts_amendments.id"), nullable=True)
+    items: Mapped[list["VariationItem"]] = relationship(back_populates="variation", cascade="all, delete-orphan",
+                                                       order_by="VariationItem.line_no")
+
+
+class VariationItem(Base):
+    """A priced line. amount = quantity x rate, computed by the server in fixed-point decimals."""
+    __tablename__ = "commercial_variation_items"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    variation_id: Mapped[str] = mapped_column(ForeignKey("commercial_variations.id", ondelete="CASCADE"), index=True)
+    line_no: Mapped[int] = mapped_column(Integer)
+    description: Mapped[str] = mapped_column(String(500))
+    cost_type: Mapped[str] = mapped_column(String(20), default="OTHER")
+    pricing_basis: Mapped[str] = mapped_column(String(20), default="CONTRACT_RATE")
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+    unit: Mapped[str] = mapped_column(String(20))
+    rate: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    rate_reference: Mapped[str] = mapped_column(String(200), default="")      # BOQ row, quotation, schedule of rates
+    variation: Mapped["Variation"] = relationship(back_populates="items")
+
+
+class VariationEvidence(Base):
+    __tablename__ = "commercial_variation_evidence"
+    __table_args__ = (UniqueConstraint("variation_id", "document_revision_id", "kind"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    variation_id: Mapped[str] = mapped_column(ForeignKey("commercial_variations.id", ondelete="CASCADE"), index=True)
+    document_revision_id: Mapped[str] = mapped_column(ForeignKey("documents_revisions.id"))
+    kind: Mapped[str] = mapped_column(String(20))      # INSTRUCTION, NOTICE, QUOTATION, PROGRAMME, ...
+    note: Mapped[str] = mapped_column(Text, default="")
+    linked_by: Mapped[str] = mapped_column(String(36))
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 # ---------------------------------------------------------------- governance
 class AuditEvent(Base):
     """Append-only business-event ledger."""

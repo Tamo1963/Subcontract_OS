@@ -60,6 +60,7 @@ def dashboard(pid: str, user: User = Depends(current_user), db: Session = Depend
         "documents": {"revisions": len(revs), "review_required": sum(r[0] == "REVIEW_REQUIRED" for r in revs),
                       "conflicts": sum(r[0] == "CONFLICT" for r in revs),
                       "pending_assertions": len(pending_assert)},
+        "variations": _variation_kpis(db, pid, subs),
         "overdue_obligations": [o for o in obs if o["overdue"]],
         "upcoming_obligations": upcoming,
     }
@@ -74,3 +75,25 @@ def audit_events(project_id: str, limit: int = 200, user: User = Depends(current
     return [{"id": e.id, "at": e.occurred_at.isoformat(), "actor": users.get(e.actor_id, e.actor_id),
              "action": e.action, "object_type": e.object_type, "object_id": e.object_id, "before": e.before,
              "after": e.after, "reason": e.reason} for e in rows]
+
+
+def _variation_kpis(db, pid, subs):
+    from decimal import Decimal
+
+    from app.models import Variation
+    from app.services import variations as V
+    vs = list(db.scalars(select(Variation).where(Variation.project_id == pid)))
+    open_vs = [v for v in vs if v.status in V.OPEN_STATES]
+    at_risk = [v for v in open_vs if V.notice_status(v)["at_risk"]]
+    ests = [V.best_estimate(v)[0] or Decimal(0) for v in open_vs]
+    exposure = sum((e for e in ests if e > 0), Decimal(0))
+    omissions = sum((e for e in ests if e < 0), Decimal(0))
+    approved = sum((v.approved_amount or Decimal(0) for v in vs if v.status == "APPROVED"), Decimal(0))
+    return {"open": len(open_vs), "notice_at_risk": len(at_risk),
+            "awaiting_approval": sum(v.status == "APPROVAL_PENDING" for v in vs),
+            "open_exposure": str(exposure.quantize(Decimal("0.01"))),
+            "open_omissions": str(omissions.quantize(Decimal("0.01"))),
+            "approved_not_incorporated": str(approved.quantize(Decimal("0.01"))),
+            "notice_alerts": [{"id": v.id, "number": v.variation_number, "title": v.title,
+                               "subcontract_id": v.subcontract_id, **V.notice_status(v)}
+                              for v in open_vs if V.notice_status(v)["at_risk"] or V.notice_status(v)["status"] == "PENDING"]}
