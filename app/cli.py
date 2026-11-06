@@ -3,6 +3,7 @@
     python -m app.cli migrate                    apply database migrations
     python -m app.cli create-admin [username]    create a system administrator with a temporary password
     python -m app.cli reset-password <username>  issue a new temporary password (revokes sessions)
+    python -m app.cli reset-mfa <username>       remove a lost authenticator app (revokes sessions)
 """
 import sys
 
@@ -49,6 +50,19 @@ def main(argv):
             db.execute(update(UserSession).where(UserSession.user_id == u.id).values(revoked_at=auth.utcnow()))
             db.commit()
             print(f"Temporary password for {u.username}: {temp}")
+            return 0
+        if cmd == "reset-mfa" and len(argv) > 1:
+            from app.routers.mfa import _drop
+            u = db.scalar(select(User).where(User.username == argv[1]))
+            if not u:
+                print("No such user")
+                return 1
+            _drop(db, u)
+            db.execute(update(UserSession).where(UserSession.user_id == u.id).values(revoked_at=auth.utcnow()))
+            from app import audit
+            audit.record(db, u.id, "user.mfa_reset", "User", u.id, after={"via": "cli"})
+            db.commit()
+            print(f"Authenticator removed for {u.username}; sessions signed out.")
             return 0
     print(__doc__)
     return 1

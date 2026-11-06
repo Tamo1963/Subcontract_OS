@@ -1,5 +1,5 @@
 """Registry, projects, memberships and main contracts (roadmap Step 4)."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -27,7 +27,8 @@ def sc_out(s: Subcontractor) -> dict:
 
 
 @router.get("/me")
-def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def me(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    from app import mfa
     from app.idp.groups import active_grants
     ms = list(db.scalars(select(ProjectMembership).where(ProjectMembership.user_id == user.id)))
     grants = active_grants(db, user)
@@ -40,7 +41,10 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
             "manual_roles": user.roles, "clearance": user.clearance,
             "projects": {k: sorted(v) for k, v in projects.items()},
             "directory_roles": [{"role": g.role, "project_id": g.project_id} for g in grants],
-            "must_change_password": bool(user.must_change_password and user.password_hash)}
+            "must_change_password": bool(user.must_change_password and user.password_hash),
+            "mfa_enabled": mfa.enabled(user), "signed_in_with": getattr(request.state, "session_method", None),
+            "mfa_enrolment_required": bool(getattr(request.state, "session_method", None) == "password"
+                                           and user.password_hash and not mfa.enabled(user) and mfa.required_for(db, user))}
 
 
 @router.post("/subcontractors", status_code=201)

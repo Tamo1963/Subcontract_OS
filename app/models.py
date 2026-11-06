@@ -39,6 +39,11 @@ class User(Base):
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Authenticator app (TOTP, ADR-0007). Secrets are encrypted; pending = scanned but not yet confirmed.
+    totp_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_pending_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    totp_last_step: Mapped[int | None] = mapped_column(Integer, nullable=True)      # replay protection
 
 
 class IdentityProvider(Base):
@@ -129,6 +134,30 @@ class UserSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     client: Mapped[str] = mapped_column(String(300), default="")
+    method: Mapped[str] = mapped_column(String(20), default="password", server_default="password")  # password | password+totp | sso
+
+
+class MfaRecoveryCode(Base):
+    """Single-use recovery code for a lost authenticator. Only the SHA-256 is stored."""
+    __tablename__ = "identity_mfa_recovery_codes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("identity_users.id", ondelete="CASCADE"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MfaChallenge(Base):
+    """Password accepted, authenticator code still due. Short-lived, single-use, limited attempts."""
+    __tablename__ = "identity_mfa_challenges"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("identity_users.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    issue_bearer_token: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ProjectMembership(Base):

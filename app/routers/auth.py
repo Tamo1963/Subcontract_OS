@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app import audit, auth, config
+from app import audit, auth, config, mfa
 from app.db import get_db
-from app.models import User, UserSession
+from app.models import MfaChallenge, User, UserSession
 from app.security import CLEARANCE_ORDER, PERMISSIONS, current_user, require
 
 router = APIRouter(prefix="/api/v1", tags=["authentication & users"])
@@ -29,7 +29,7 @@ def _set_cookie(resp: Response, token: str):
 
 def issue_session(db: Session, user: User, request: Request, response: Response, how: str) -> tuple[str, object]:
     token, th, expires = auth.new_session_token()
-    db.add(UserSession(token_hash=th, user_id=user.id, expires_at=expires,
+    db.add(UserSession(token_hash=th, user_id=user.id, expires_at=expires, method=how,
                        client=(request.headers.get("user-agent") or "")[:300]))
     user.failed_logins, user.locked_until, user.last_login_at = 0, None, auth.utcnow()
     audit.record(db, user.id, "auth.login", "User", user.id, after={"method": how})
@@ -74,11 +74,67 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
         db.commit()
         raise HTTPException(403, {"code": "PASSWORD_LOGIN_DISABLED",
                                   "message": "Password sign-in is turned off; use your company sign-in"})
-    token, expires = issue_session(db, user, request, response, "password")
+    if mfa.enabled(user):          # ADR-0007: password accepted, authenticator code still due
+        raw = auth.new_session_token()[0]
+        db.add(MfaChallenge(token_hash=auth.token_hash(raw), user_id=user.id, issue_bearer_token=body.issue_bearer_token,
+                            expires_at=auth.utcnow() + timedelta(minutes=mfa.CHALLENGE_MINUTES)))
+        audit.record(db, user.id, "auth.mfa_challenge_issued", "User", user.id)
+        db.commit()
+        return {"mfa_required": True, "mfa_token": raw, "expires_in_seconds": mfa.CHALLENGE_MINUTES * 60,
+                "message": "Enter the 6-digit code from your authenticator app, or a recovery code"}
+    return _complete_login(db, user, request, response, "password", body.issue_bearer_token)
+
+
+def _complete_login(db, user, request, response, how, bearer):
+    token, expires = issue_session(db, user, request, response, how)
     out = {"username": user.username, "full_name": user.full_name, "must_change_password": user.must_change_password,
            "expires_at": expires.isoformat()}
-    if body.issue_bearer_token:
+    if bearer:
         out["bearer_token"] = token
+    return out
+
+
+class MfaLoginIn(BaseModel):
+    mfa_token: str
+    code: str = Field(min_length=6, max_length=20)     # 6-digit app code or a recovery code
+
+
+@router.post("/auth/login/mfa")
+def login_mfa(body: MfaLoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    expired = HTTPException(401, {"code": "MFA_CHALLENGE_EXPIRED", "message": "Sign-in step expired; enter your password again"})
+    ch = db.scalar(select(MfaChallenge).where(MfaChallenge.token_hash == auth.token_hash(body.mfa_token)))
+    if (not ch or ch.used_at or auth.aware(ch.expires_at) <= auth.utcnow()
+            or ch.attempts >= mfa.CHALLENGE_ATTEMPTS):
+        raise expired
+    user = db.get(User, ch.user_id)
+    if not user or not user.is_active or not mfa.enabled(user):
+        raise expired
+    if user.locked_until and auth.aware(user.locked_until) > auth.utcnow():
+        raise HTTPException(423, {"code": "ACCOUNT_LOCKED", "message": "Account temporarily locked; try later or ask an administrator"})
+    how = None
+    if mfa.looks_like_recovery(body.code):
+        if mfa.use_recovery_code(db, user, body.code):
+            how = "password+recovery"
+    else:
+        step = mfa.verify(mfa.decrypt(user.totp_secret_encrypted), body.code, user.totp_last_step)
+        if step is not None:
+            user.totp_last_step, how = step, "password+totp"
+    if how is None:
+        ch.attempts += 1
+        user.failed_logins = (user.failed_logins or 0) + 1      # wrong codes count towards lockout too
+        if user.failed_logins >= config.MAX_FAILED_LOGINS:
+            user.locked_until = auth.utcnow() + timedelta(minutes=config.LOCKOUT_MINUTES)
+            user.failed_logins = 0
+            ch.used_at = auth.utcnow()
+            audit.record(db, user.id, "auth.account_locked", "User", user.id)
+        audit.record(db, user.id, "auth.mfa_failed", "User", user.id)
+        db.commit()
+        raise HTTPException(401, {"code": "INVALID_MFA_CODE", "message": "That code is not valid (or was already used)"})
+    ch.used_at = auth.utcnow()
+    if how == "password+recovery":
+        audit.record(db, user.id, "auth.mfa_recovery_code_used", "User", user.id, after={"left": mfa.recovery_left(db, user)})
+    out = _complete_login(db, user, request, response, how, ch.issue_bearer_token)
+    out["recovery_codes_left"] = mfa.recovery_left(db, user)
     return out
 
 
@@ -125,7 +181,7 @@ def user_out(u: User) -> dict:
     locked = bool(u.locked_until and auth.aware(u.locked_until) > auth.utcnow())
     return {"username": u.username, "full_name": u.full_name, "email": u.email, "roles": u.roles, "clearance": u.clearance,
             "is_active": u.is_active, "must_change_password": u.must_change_password, "locked": locked,
-            "has_password": bool(u.password_hash),
+            "has_password": bool(u.password_hash), "mfa_enabled": mfa.enabled(u),
             "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None}
 
 

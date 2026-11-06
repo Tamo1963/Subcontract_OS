@@ -118,13 +118,18 @@ manual roles are never changed and `system_admin` always stays local. See
 [ADR-0006](docs/adr/0006-directory-group-role-mapping.md). The test provider's people carry demo groups
 (`EPC-Contracts`, `P101-Project-Team`, `EPC-Legal`, `EPC-Engineering`).
 
+**Authenticator app (2-step sign-in):** anyone with a password can turn on a 6-digit code from Microsoft/Google
+Authenticator in **My sign-in**; administrators can require it for administrators or everyone. Ten one-time
+recovery codes cover a lost phone; an administrator can reset it (`python -m app.cli reset-mfa <user>` as a last
+resort). Company sign-in is unaffected. See [ADR-0007](docs/adr/0007-authenticator-app-codes.md).
+
 Sessions, lockout, CSRF protection and the password policy are described in
 [ADR-0004](docs/adr/0004-authentication.md). All organisations, people and values in the demo are fictional.
 
 ## Tests
 
 ```bash
-python -m pytest -q        # 96 tests: acceptance IDs, LLM layer, authentication, sign-in providers, directory groups
+python -m pytest -q        # 107 tests: acceptance IDs, LLM layer, authentication, sign-in providers, directory groups, authenticator app
 SCOS_TEST_DATABASE_URL=postgresql+psycopg://... python -m pytest -q   # same suite on PostgreSQL
 ```
 
@@ -148,7 +153,7 @@ docs/                  blueprint, ADRs, traceability
 
 ## Next steps (roadmap)
 
-1. Confirm the ADR-0001 decisions; register the company's sign-in provider and its group mappings (ADR-0005/0006); TOTP for local accounts; backups and restore drill.
+1. Confirm the ADR-0001 decisions; register the company's sign-in provider and its group mappings (ADR-0005/0006); require authenticator codes for administrators (ADR-0007); backups and restore drill.
 2. OCR for scanned contracts; email and batch intake; background worker for processing jobs.
 3. pgvector semantic stage; evaluate registered models against the labelled set before assignment.
 4. Phase 4–5 modules: mobilisation and enablers, field/QA/HSE, variations, measurement and payment.

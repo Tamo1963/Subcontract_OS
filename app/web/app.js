@@ -18,6 +18,7 @@ async function api(path, opts = {}) {
     const e = body?.error || { message: body };
     if (r.status === 401 && !opts.quiet) { showLogin("Your session has ended. Please sign in again."); throw e; }
     if (e.code === "PASSWORD_CHANGE_REQUIRED") { showChangePassword(true); throw e; }
+    if (e.code === "MFA_ENROLMENT_REQUIRED") { showMfaSetup(true); throw e; }
     if (!opts.quiet) toast(`${e.code || r.status}: ${e.message}`, true);
     throw e;
   }
@@ -35,6 +36,7 @@ async function boot() {
   $("#pw-btn").onclick = () => showMyAccount();
   try { S.me = await api("/api/v1/me", { quiet: true }); } catch (e) { return showLogin(); }
   if (S.me.must_change_password) return showChangePassword(true);
+  if (S.me.mfa_enrolment_required) return showMfaSetup(true);
   $("#login").classList.add("hidden");
   if (location.hash === "#linked") { history.replaceState(null, "", "/"); toast("Company login linked to your account"); }
   const err = hashMessage(); if (err) toast(err, true);
@@ -71,7 +73,8 @@ async function showLogin(msg = "") {
     <div class="err" id="l-err">${esc(msg)}</div>
     <p class="hint">First sign-in with a password uses the temporary password issued by your administrator; you will be asked to set your own.</p>`;
   const go = async () => {
-    try { await api("/api/v1/auth/login", { method: "POST", quiet: true, json: { username: $("#l-user").value, password: $("#l-pw").value } }); boot(); }
+    try { const r = await api("/api/v1/auth/login", { method: "POST", quiet: true, json: { username: $("#l-user").value, password: $("#l-pw").value } });
+          r.mfa_required ? showMfaStep(r.mfa_token) : boot(); }
     catch (e) { $("#l-err").textContent = e.message || "Sign-in failed"; }
   };
   $("#l-go").onclick = go; $("#l-pw").onkeydown = (e) => { if (e.key === "Enter") go(); };
@@ -79,14 +82,16 @@ async function showLogin(msg = "") {
   if (!pwHidden) $("#l-user").focus();
 }
 async function showMyAccount() {
-  const [mine, opts] = await Promise.all([api("/api/v1/me/identities"), api("/api/v1/auth/providers")]);
+  const [mine, opts, mfaHtml] = await Promise.all([api("/api/v1/me/identities"), api("/api/v1/auth/providers"), mfaSection()]);
   const linked = new Set(mine.map(x => x.provider_id));
   openModal(`<h2>My sign-in</h2><p class="small muted">Signed in as <b>${esc(S.me.username)}</b>. Link a company login to sign in with it next time.</p>
     <h3>Linked company logins</h3>${mine.length ? `<table>${mine.map(x => `<tr><td><b>${esc(x.provider)}</b><div class="small muted">${esc(x.email || "")}</div></td>
       <td class="small mono">${esc((x.last_used_at || x.linked_at).replace("T", " ").slice(0, 16))}</td><td><button class="danger" data-unlink="${x.id}">Unlink</button></td></tr>`).join("")}</table>`
       : `<p class="muted small">None yet.</p>`}
     ${opts.providers.filter(p => !linked.has(p.id)).map(p => `<button data-link="${p.id}">Link: ${esc(p.label)}</button> `).join("")}
+    ${mfaHtml}
     <h3>Password</h3><button id="my-pw">Change password</button>`);
+  bindMfaSection();
   document.querySelectorAll("[data-link]").forEach(b => b.onclick = async () => {
     try { const r = await api(`/api/v1/auth/oidc/${b.dataset.link}/link`, { method: "POST" }); location.href = r.authorization_url; } catch (e) {} });
   document.querySelectorAll("[data-unlink]").forEach(b => b.onclick = async () => {
@@ -110,6 +115,100 @@ function showChangePassword(forced) {
     catch (e) { $("#c-err").textContent = e.message || "Could not change password"; }
   };
   $("#c-cancel") && ($("#c-cancel").onclick = () => $("#login").classList.add("hidden"));
+}
+// ---------------------------------------------------------------- authenticator app (ADR-0007)
+function showMfaStep(token) {
+  $("#login-body").innerHTML = `<h2>Authenticator code</h2>
+    <p class="hint" style="margin-top:0">Open your authenticator app and enter the 6-digit code for <b>Subcontract OS</b>.</p>
+    <label>Code</label><input id="m-code" inputmode="numeric" autocomplete="one-time-code" maxlength="20" placeholder="123 456">
+    <button class="primary" id="m-go">Verify</button>
+    <div class="err" id="m-err"></div>
+    <p class="hint">Lost your phone? Type one of your recovery codes (like <span class="mono">ABCDE-FGHJK</span>) instead. Each works once.</p>
+    <a href="#" id="m-back" class="small">Back to sign-in</a>`;
+  const go = async () => {
+    try { const r = await api("/api/v1/auth/login/mfa", { method: "POST", quiet: true, json: { mfa_token: token, code: $("#m-code").value } });
+          if (r.recovery_codes_left !== undefined && r.recovery_codes_left <= 3) toast(`Only ${r.recovery_codes_left} recovery codes left — make new ones in My sign-in.`, true);
+          boot(); }
+    catch (e) { if (e.code === "MFA_CHALLENGE_EXPIRED" || e.code === "ACCOUNT_LOCKED") return showLogin(e.message);
+                $("#m-err").textContent = e.message || "Code not accepted"; $("#m-code").select(); }
+  };
+  $("#m-go").onclick = go; $("#m-code").onkeydown = (e) => { if (e.key === "Enter") go(); };
+  $("#m-back").onclick = (e) => { e.preventDefault(); showLogin(); };
+  $("#m-code").focus();
+}
+function showRecoveryCodes(codes, then) {
+  const text = codes.join("\n");
+  return `<h2>Recovery codes</h2><p class="hint" style="margin-top:0">Shown once. Each code signs you in once if your phone is lost. Print them or keep them in a password manager — not on the same phone.</p>
+    <div class="codes mono">${codes.map(c => `<span>${esc(c)}</span>`).join("")}</div>
+    <div class="row"><button id="rc-copy">Copy</button><button id="rc-dl">Download .txt</button></div>
+    <label class="small" style="display:flex;gap:6px;align-items:center;margin-top:14px"><input type="checkbox" id="rc-ok" style="width:auto"> I have saved these codes</label>
+    <button class="primary" id="rc-done" disabled>${then}</button>`;
+}
+function bindRecoveryCodes(codes, done) {
+  const text = codes.join("\n");
+  $("#rc-copy").onclick = async () => { try { await navigator.clipboard.writeText(text); toast("Copied"); } catch (e) { toast("Copy failed — select and copy them by hand", true); } };
+  $("#rc-dl").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([`Subcontract OS recovery codes for ${S.me?.username || ""}\n\n${text}\n`], { type: "text/plain" }));
+    a.download = "subcontract-os-recovery-codes.txt"; a.click(); URL.revokeObjectURL(a.href); };
+  $("#rc-ok").onchange = (e) => { $("#rc-done").disabled = !e.target.checked; };
+  $("#rc-done").onclick = done;
+}
+function showMfaSetup(forced) {
+  $("#login").classList.remove("hidden");
+  const panel = $("#login-body");
+  panel.innerHTML = `<h2>Set up an authenticator app</h2>
+    ${forced ? `<p class="hint" style="margin-top:0">Your organisation requires a second step at sign-in. This takes about a minute.</p>` : ""}
+    <p class="hint" style="margin-top:0">You need an authenticator app on your phone — Microsoft Authenticator, Google Authenticator, Authy or a password manager. First confirm your password.</p>
+    <label>Password</label><input id="s-pw" type="password" autocomplete="current-password">
+    <div class="err" id="s-err"></div><button class="primary" id="s-go">Continue</button>
+    ${forced ? `<a href="#" id="s-out" class="small">Sign out</a>` : `<button id="s-cancel">Cancel</button>`}`;
+  const cancel = () => forced ? $("#logout-btn").click() : $("#login").classList.add("hidden");
+  const back = $("#s-out") || $("#s-cancel"); back.onclick = (e) => { e.preventDefault(); cancel(); };
+  const step1 = async () => {
+    let r; try { r = await api("/api/v1/me/mfa/totp/setup", { method: "POST", quiet: true, json: { password: $("#s-pw").value } }); }
+    catch (e) { return ($("#s-err").textContent = e.message || "Could not start set-up"); }
+    panel.innerHTML = `<h2>Scan this code</h2>
+      <p class="hint" style="margin-top:0">In the app choose <b>Add account</b> → <b>Scan a QR code</b>.</p>
+      <div class="qr">${r.qr_svg || ""}</div>
+      <p class="hint">Can't scan? Enter this key by hand (time-based, 6 digits):</p><p class="secret mono">${esc(r.secret)}</p>
+      <label>Then type the 6-digit code the app shows</label><input id="s-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7">
+      <div class="err" id="s-err"></div><button class="primary" id="s-confirm">Turn on</button>
+      <button id="s-cancel2">Cancel</button>`;
+    $("#s-cancel2").onclick = cancel;
+    const confirm2 = async () => {
+      let res; try { res = await api("/api/v1/me/mfa/totp/confirm", { method: "POST", quiet: true, json: { code: $("#s-code").value } }); }
+      catch (e) { return ($("#s-err").textContent = e.message || "Code not accepted"); }
+      panel.innerHTML = showRecoveryCodes(res.recovery_codes, "Finish");
+      bindRecoveryCodes(res.recovery_codes, () => { toast("Authenticator app turned on"); forced ? boot() : $("#login").classList.add("hidden"); });
+    };
+    $("#s-confirm").onclick = confirm2; $("#s-code").onkeydown = (e) => { if (e.key === "Enter") confirm2(); };
+    $("#s-code").focus();
+  };
+  $("#s-go").onclick = step1; $("#s-pw").onkeydown = (e) => { if (e.key === "Enter") step1(); };
+  $("#s-pw").focus();
+}
+async function mfaSection() {
+  const m = await api("/api/v1/me/mfa");
+  if (!m.available) return `<h3>Authenticator app</h3><p class="small muted">You sign in with a company login; its provider handles the second step.</p>`;
+  return `<h3>Authenticator app</h3>${m.enabled
+    ? `<p class="small">${pill("ON", "ok")} since ${esc(m.enabled_at.slice(0, 10))} · ${m.recovery_codes_left} recovery codes left${m.required ? " · required by your organisation" : ""}</p>
+       <div class="row"><button id="mfa-codes">New recovery codes</button>${m.required ? "" : `<button class="danger" id="mfa-off">Turn off</button>`}</div>`
+    : `<p class="small muted">Off. Adds a 6-digit code from your phone after your password.</p><button id="mfa-on">Set up authenticator app</button>`}`;
+}
+function bindMfaSection() {
+  $("#mfa-on") && ($("#mfa-on").onclick = () => { closeModal(); showMfaSetup(false); });
+  $("#mfa-codes") && ($("#mfa-codes").onclick = () => {
+    openModal(`<h2>New recovery codes</h2><p class="small muted">Your current recovery codes will stop working.</p><div class="form">
+      <label>Code from your app</label><input id="rc-code" inputmode="numeric" autocomplete="one-time-code"></div><button class="primary" id="rc-make">Make new codes</button>`);
+    $("#rc-make").onclick = async () => { try { const r = await api("/api/v1/me/mfa/recovery-codes", { method: "POST", json: { code: $("#rc-code").value } });
+      $("#modal-body").innerHTML = showRecoveryCodes(r.recovery_codes, "Done"); bindRecoveryCodes(r.recovery_codes, closeModal); } catch (e) {} };
+  });
+  $("#mfa-off") && ($("#mfa-off").onclick = () => {
+    openModal(`<h2>Turn off the authenticator app</h2><p class="small muted">Sign-in will need only your password.</p><div class="form">
+      <label>Password</label><input id="off-pw" type="password" autocomplete="current-password">
+      <label>Code from your app (or a recovery code)</label><input id="off-code" autocomplete="one-time-code"></div><button class="danger" id="off-go">Turn off</button>`);
+    $("#off-go").onclick = async () => { try { await api("/api/v1/me/mfa/totp/disable", { method: "POST", json: { password: $("#off-pw").value, code: $("#off-code").value } });
+      toast("Authenticator app turned off"); showMyAccount(); } catch (e) {} };
+  });
 }
 async function loadProjects() {
   const me = S.me = await api("/api/v1/me");
@@ -416,9 +515,9 @@ VIEWS.users = async () => {
   return `<h1>Users &amp; access</h1><p class="sub">Create accounts with one-time temporary passwords, reset passwords, unlock and deactivate users. Project access is granted per project by its coordinator.</p>
   <div class="card"><h2>Accounts</h2><table><tr><th>User</th><th>E-mail (company sign-in)</th><th>Global roles</th><th>Clearance</th><th>Status</th><th>Last sign-in</th><th></th></tr>
   ${d.users.map(u => `<tr><td><b>${esc(u.username)}</b><div class="small muted">${esc(u.full_name)}</div></td><td class="small">${esc(u.email || "—")} <a href="#" data-email="${esc(u.username)}" data-cur="${esc(u.email || "")}">edit</a></td><td class="small">${esc(u.roles.join(", ") || "—")}${(u.directory_roles || []).map(r => ` <span class="pill info" title="From a directory group">${esc(r)} · directory</span>`).join("")}</td><td>${esc(u.clearance)}</td>
-    <td>${u.is_active ? pill("ACTIVE", "ok") : pill("DISABLED", "bad")} ${u.locked ? pill("LOCKED", "bad") : ""} ${u.must_change_password ? pill("TEMP PASSWORD", "warn") : ""}</td>
+    <td>${u.is_active ? pill("ACTIVE", "ok") : pill("DISABLED", "bad")} ${u.locked ? pill("LOCKED", "bad") : ""} ${u.must_change_password ? pill("TEMP PASSWORD", "warn") : ""} ${u.mfa_enabled ? pill("2-STEP", "ok") : ""}</td>
     <td class="mono small">${esc((u.last_login_at || "never").replace("T", " ").slice(0, 16))}</td>
-    <td class="row" style="flex-wrap:nowrap"><button data-reset="${esc(u.username)}">Reset password</button>${u.locked ? `<button data-unlock="${esc(u.username)}">Unlock</button>` : ""}
+    <td class="row" style="flex-wrap:nowrap"><button data-reset="${esc(u.username)}">Reset password</button>${u.mfa_enabled && u.username !== S.me.username ? `<button data-mfareset="${esc(u.username)}" title="For a lost phone">Reset 2-step</button>` : ""}${u.locked ? `<button data-unlock="${esc(u.username)}">Unlock</button>` : ""}
       <button class="${u.is_active ? "danger" : ""}" data-active="${esc(u.username)}" data-to="${!u.is_active}">${u.is_active ? "Disable" : "Enable"}</button></td></tr>`).join("")}</table></div>
   <div class="card"><h2>New user</h2><div class="form">
     <label>Username</label><input id="nu-name" placeholder="firstname.lastname">
@@ -440,6 +539,8 @@ VIEWS.users = async () => {
     bindIdp(idp);
     document.querySelectorAll("[data-reset]").forEach(b => b.onclick = async () => { if (!confirm(`Issue a new temporary password for ${b.dataset.reset}? Their sessions will be signed out.`)) return;
       try { const r = await api(`/api/v1/users/${b.dataset.reset}/reset-password`, { method: "POST" }); render(); showTemp(r); } catch (e) {} });
+    document.querySelectorAll("[data-mfareset]").forEach(b => b.onclick = async () => { if (!confirm(`Remove ${b.dataset.mfareset}'s authenticator app? Use this only after confirming who is asking (for example a lost phone). They will be signed out everywhere.`)) return;
+      try { await api(`/api/v1/users/${b.dataset.mfareset}/reset-mfa`, { method: "POST" }); toast("Authenticator removed"); render(); } catch (e) {} });
     document.querySelectorAll("[data-unlock]").forEach(b => b.onclick = async () => { try { await api(`/api/v1/users/${b.dataset.unlock}`, { method: "PATCH", json: { unlock: true } }); toast("Unlocked"); render(); } catch (e) {} });
     document.querySelectorAll("[data-active]").forEach(b => b.onclick = async () => { try { await api(`/api/v1/users/${b.dataset.active}`, { method: "PATCH", json: { is_active: b.dataset.to === "true" } }); render(); } catch (e) {} });
   })}`;
@@ -448,7 +549,9 @@ VIEWS.users = async () => {
 function idpCard(idp) {
   return `<div class="card"><div class="row"><h2>Sign-in providers</h2><span class="spacer"></span>
     <label class="small">Password sign-in <select id="pw-policy"><option value="all" ${idp.password_login === "all" ? "selected" : ""}>Everyone</option>
-    <option value="admins_only" ${idp.password_login === "admins_only" ? "selected" : ""}>Administrators only</option></select></label></div>
+    <option value="admins_only" ${idp.password_login === "admins_only" ? "selected" : ""}>Administrators only</option></select></label>
+    <label class="small">Authenticator code with password <select id="mfa-policy">${[["off", "Optional"], ["admins", "Required for administrators"], ["all", "Required for everyone"]]
+      .map(([v, l]) => `<option value="${v}" ${idp.mfa_required === v ? "selected" : ""}>${l}</option>`).join("")}</select></label></div>
     <p class="small muted">Any OpenID Connect provider. Accounts and roles stay here; a provider only proves identity. Invite people by setting their work e-mail above — they are linked at first company sign-in. Redirect URI to register with the provider: <span class="mono">${esc(idp.redirect_uri)}</span></p>
     ${idp.providers.length ? `<table><tr><th>Name</th><th>Provider</th><th>Issuer</th><th>Client</th><th>Domains</th><th>New users</th><th>Linked</th><th></th></tr>
       ${idp.providers.map(p => `<tr><td><b>${esc(p.name)}</b>${p.enabled ? "" : " " + pill("DISABLED")}<div class="small muted">${esc(p.button_label)}</div></td><td class="small">${esc(p.provider_label)}</td>
@@ -501,6 +604,7 @@ function bindIdp(idp) {
   document.querySelectorAll("[data-idgroups]").forEach(b => b.onclick = () => groupRolesModal(b.dataset.idgroups));
   const fill = () => { const c = idp.catalogue.find(x => x.key === $("#ip-type").value); $("#ip-iss").value = c.issuer_template; $("#ip-btn").value = c.button_label; $("#ip-note").textContent = c.note; };
   $("#ip-type").onchange = fill; fill();
+  $("#mfa-policy").onchange = async (e) => { try { await api("/api/v1/auth/policy", { method: "PUT", json: { mfa_required: e.target.value } }); toast("Sign-in policy saved"); if (!S.me.mfa_enabled && e.target.value !== "off") boot(); } catch (er) { render(); } };
   $("#pw-policy").onchange = async (e) => { try { await api("/api/v1/auth/policy", { method: "PUT", json: { password_login: e.target.value } }); toast("Sign-in policy saved"); } catch (er) { render(); } };
   $("#ip-go").onclick = async () => { try { await api("/api/v1/auth/identity-providers", { method: "POST", json: { name: $("#ip-name").value, provider_type: $("#ip-type").value,
       issuer: $("#ip-iss").value.trim(), client_id: $("#ip-cid").value.trim(), client_secret: $("#ip-sec").value || null, client_secret_env: $("#ip-env").value || null,

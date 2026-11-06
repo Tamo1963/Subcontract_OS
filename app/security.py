@@ -44,20 +44,20 @@ PERMISSIONS: dict[str, set[str]] = {
 }
 
 
-def _session_user(db: Session, token: str) -> User | None:
+def _session(db: Session, token: str) -> tuple[User | None, UserSession | None]:
     sess = db.scalar(select(UserSession).where(UserSession.token_hash == auth.token_hash(token)))
     if not sess or sess.revoked_at or auth.aware(sess.expires_at) <= auth.utcnow():
-        return None
-    return db.get(User, sess.user_id)
+        return None, None
+    return db.get(User, sess.user_id), sess
 
 
 def current_user(request: Request, db: Session = Depends(get_db), authorization: str | None = Header(default=None),
                  x_user: str | None = Header(default=None)) -> User:
-    user, via_cookie = None, False
+    user, sess, via_cookie = None, None, False
     if authorization and authorization.lower().startswith("bearer "):
-        user = _session_user(db, authorization[7:].strip())
+        user, sess = _session(db, authorization[7:].strip())
     elif request.cookies.get(auth.COOKIE):
-        user, via_cookie = _session_user(db, request.cookies[auth.COOKIE]), True
+        (user, sess), via_cookie = _session(db, request.cookies[auth.COOKIE]), True
     elif x_user and config.ALLOW_DEV_AUTH:     # development/test only; disabled by default
         user = db.scalar(select(User).where(User.username == x_user))
     if not user or not user.is_active:
@@ -66,7 +66,17 @@ def current_user(request: Request, db: Session = Depends(get_db), authorization:
         raise HTTPException(403, {"code": "CSRF", "message": "Missing anti-forgery header"})
     if user.must_change_password and user.password_hash and not request.url.path.startswith(PASSWORD_CHANGE_ALLOWED):
         raise HTTPException(403, {"code": "PASSWORD_CHANGE_REQUIRED", "message": "Change your temporary password first"})
+    if sess is not None and mfa_enrolment_due(db, user, sess) and not request.url.path.startswith(PASSWORD_CHANGE_ALLOWED):
+        raise HTTPException(403, {"code": "MFA_ENROLMENT_REQUIRED", "message": "Set up your authenticator app first"})
+    request.state.session_method = sess.method if sess is not None else None
     return user
+
+
+def mfa_enrolment_due(db: Session, user: User, sess: UserSession | None) -> bool:
+    """A password session of someone the policy requires to use an authenticator, who has not set one up."""
+    from app import mfa
+    return bool(sess is not None and sess.method == "password" and user.password_hash
+                and not mfa.enabled(user) and mfa.required_for(db, user))
 
 
 def global_roles(db: Session, user: User) -> set[str]:

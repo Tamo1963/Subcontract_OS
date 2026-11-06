@@ -38,5 +38,5 @@ covers invitations, linking, auto-creation, domain rules, unverified e-mail, bro
 and seven tampered-token cases. Demo: `uvicorn seed.mock_oidc:app --port 8098`, register issuer
 `http://localhost:8098`, client `scos-demo`, secret `demo-secret`.
 
-## Later (phase 3)
-Directory-group → role mapping; authenticator-app codes (TOTP) for local accounts.
+## Later (phase 3) — done
+Directory-group → role mapping (ADR-0006, 3 Nov 2026); authenticator-app codes for password accounts (ADR-0007, 6 Nov 2026).

@@ -178,7 +178,12 @@ def admin_list(user: User = Depends(current_user), db: Session = Depends(get_db)
     require(db, user, "user.admin")
     return {"providers": [prov_out(p, db) for p in db.scalars(select(IdentityProvider).order_by(IdentityProvider.name))],
             "catalogue": catalogue.as_dicts(), "redirect_uri": oidc.redirect_uri(),
-            "password_login": password_login_policy(db)}
+            "password_login": password_login_policy(db), "mfa_required": _mfa_policy(db)}
+
+
+def _mfa_policy(db):
+    from app import mfa
+    return mfa.policy(db)
 
 
 @router.post("/auth/identity-providers", status_code=201)
@@ -262,27 +267,32 @@ def admin_test(pid: str, user: User = Depends(current_user), db: Session = Depen
 
 
 class PolicyIn(BaseModel):
-    password_login: str        # "all" | "admins_only"
+    password_login: str | None = None     # "all" | "admins_only"
+    mfa_required: str | None = None       # "off" | "admins" | "all" - authenticator app for password sign-in
 
 
 @router.put("/auth/policy")
 def set_policy(body: PolicyIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     require(db, user, "user.admin")
-    if body.password_login not in ("all", "admins_only"):
+    from app import mfa
+    if body.password_login is not None and body.password_login not in ("all", "admins_only"):
         raise HTTPException(422, {"code": "INVALID_POLICY", "message": "all or admins_only"})
+    if body.mfa_required is not None and body.mfa_required not in mfa.POLICIES:
+        raise HTTPException(422, {"code": "INVALID_POLICY", "message": "mfa_required: off, admins or all"})
     if body.password_login == "admins_only" and not db.scalars(
             select(IdentityProvider).where(IdentityProvider.enabled.is_(True))).first():
         raise HTTPException(409, {"code": "NO_PROVIDER", "message": "Enable a sign-in provider before turning off passwords"})
     s = db.get(AppSetting, "auth_policy")
-    before = s.value if s else {}
+    before = dict(s.value) if s else {}
+    value = {"password_login": "all", "mfa_required": "off", **before,
+             **{k: v for k, v in body.model_dump().items() if v is not None}}
     if s:
-        s.value = {"password_login": body.password_login}
+        s.value = value
     else:
-        db.add(AppSetting(key="auth_policy", value={"password_login": body.password_login}))
-    audit.record(db, user.id, "auth.policy_changed", "AppSetting", "auth_policy", before=before,
-                 after={"password_login": body.password_login})
+        db.add(AppSetting(key="auth_policy", value=value))
+    audit.record(db, user.id, "auth.policy_changed", "AppSetting", "auth_policy", before=before, after=value)
     db.commit()
-    return {"password_login": body.password_login}
+    return value
 
 
 @router.get("/users/{username}/identities")

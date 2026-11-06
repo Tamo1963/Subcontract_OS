@@ -52,6 +52,11 @@
 | GRP-04 | Provider disabled, mapping removed or grant not refreshed within TTL → role stops counting | `test_disabled_provider_removed_mapping_and_expiry_*` | ✅ |
 | GRP-05 | Segregation of duties still enforced for directory-granted roles | `test_segregation_of_duties_still_applies_*` | ✅ |
 | GRP-06 | Dry run; admin sees source of every directory role; nested/path/case-insensitive matching | `test_preview_dry_run`, `test_admin_sees_*`, `test_matching_is_case_insensitive_*` | ✅ |
+| MFA-01 | Standard TOTP (RFC 6238 vector); secret encrypted; set-up confirmed with a live code | `test_rfc6238_reference_vector`, `test_enrolment_then_sign_in_needs_the_code` | ✅ |
+| MFA-02 | No session until the code; challenge single-use, expiring; codes not replayable; wrong codes lock the account | `test_codes_cannot_be_replayed_*`, `test_wrong_codes_count_towards_lockout_*` | ✅ |
+| MFA-03 | Recovery codes single-use, hashed, replaceable; other sessions signed out at enrolment | `test_recovery_codes_*`, `test_enrolling_signs_out_*` | ✅ |
+| MFA-04 | Policy (admins / everyone) holds password sessions at enrolment; cannot be turned off while required; company sign-in unaffected | `test_policy_requires_*`, `test_admins_only_policy_*` | ✅ |
+| MFA-05 | Turning off needs password + code; admin reset (not self) signs out everywhere; bearer tokens; passwordless accounts | `test_disable_*`, `test_admin_reset_*`, `test_bearer_token_*` | ✅ |
 | DB-01 | Whole suite passes on PostgreSQL 16; migrations match models (`alembic check`) | CI job `test-postgres` | ✅ |
 | WF-02/03, VAR-01/02, PAY-01 | Mobilisation, variations, payments | — | Phase 4–5 (not in MVP) |
 | REC-01 | Restore drill | — | Requires the pilot environment |
