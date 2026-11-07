@@ -51,6 +51,13 @@ PERMISSIONS: dict[str, set[str]] = {
     "variation.notice_risk": {"legal_reviewer", "contracts_approver"},
     "variation.approve": {"contracts_approver"},
     "variation.incorporate": {"contracts_manager"},
+    # Mobilisation and enablers (ADR-0009)
+    "enabler.manage": {"construction_manager", "project_coordinator", "project_controls"},
+    "enabler.verify": {"construction_manager", "project_coordinator"},
+    "mobilisation.manage": {"contracts_manager", "construction_manager", "project_coordinator"},
+    "mobilisation.submit": {"contracts_manager", "construction_manager", "project_coordinator", "commercial_manager",
+                            "qaqc_manager", "hse_manager"},
+    "mobilisation.exception": {"contracts_approver"},
 }
 
 

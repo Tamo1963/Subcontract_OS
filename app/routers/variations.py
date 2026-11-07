@@ -79,7 +79,8 @@ def item_out(i: VariationItem) -> dict:
 def event_out(e: ProjectEvent, names) -> dict:
     return {"id": e.id, "number": e.event_number, "type": e.event_type, "occurred_on": e.occurred_on,
             "location": e.location, "description": e.description, "subcontract_id": e.subcontract_id,
-            "source_revision_id": e.source_revision_id, "recorded_by": names.get(e.recorded_by),
+            "source_revision_id": e.source_revision_id, "enabler_id": e.enabler_id,
+            "recorded_by": names.get(e.recorded_by),
             "recorded_at": e.recorded_at.isoformat()}
 
 
@@ -135,6 +136,7 @@ class EventIn(BaseModel):
     location: str = ""
     subcontract_id: str | None = None
     source_revision_id: str | None = None
+    enabler_id: str | None = None
 
 
 @router.post("/projects/{pid}/events", status_code=201)
@@ -148,11 +150,17 @@ def record_event(pid: str, body: EventIn, user: User = Depends(current_user), db
             V.err(422, "SUBCONTRACT_NOT_IN_PROJECT", "Subcontract belongs to another project")
     if body.source_revision_id:
         _revision_in_project(db, user, body.source_revision_id, pid)
+    if body.enabler_id:
+        from app.models import Enabler
+        en = get_or_404(db, Enabler, body.enabler_id, "Enabler")
+        if en.project_id != pid:
+            V.err(422, "ENABLER_NOT_IN_PROJECT", "That enabler belongs to another project")
     n = (db.scalar(select(func.count()).select_from(ProjectEvent).where(ProjectEvent.project_id == pid)) or 0) + 1
     e = ProjectEvent(project_id=pid, subcontract_id=body.subcontract_id, event_number=f"EV-{n:03d}",
                      event_type=body.event_type, occurred_on=V.iso(body.occurred_on, "occurred_on"),
                      location=body.location, description=body.description,
-                     source_revision_id=body.source_revision_id, recorded_by=user.id)
+                     source_revision_id=body.source_revision_id, enabler_id=body.enabler_id,
+                     recorded_by=user.id)
     db.add(e)
     db.flush()
     audit.record(db, user.id, "event.recorded", "ProjectEvent", e.id, project_id=pid,
@@ -537,6 +545,12 @@ def trace(vid: str, user: User = Depends(current_user), db: Session = Depends(ge
         e = db.get(ProjectEvent, v.origin_event_id)
         node("ProjectEvent", e.id, f"{e.event_number} {e.event_type} {e.occurred_on}")
         edges.append((e.id, "MAY_GIVE_RISE_TO", v.id))
+        if e.enabler_id:
+            from app.models import Enabler
+            en = db.get(Enabler, e.enabler_id)
+            node("Enabler", en.id, f"{en.enabler_number} {en.name} (planned {en.planned_date}, "
+                 f"available {en.actual_date or en.forecast_date or en.planned_date})")
+            edges.append((en.id, "LATENESS_RECORDED_IN", e.id))
     if v.notice_obligation_id:
         ob = db.get(Obligation, v.notice_obligation_id)
         node("Obligation", ob.id, f"{ob.obligation_number} notice within {ob.notice_period_days} days")

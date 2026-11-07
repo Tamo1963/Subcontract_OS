@@ -62,5 +62,9 @@
 | VAR-02 | Approved value changes the forecast only by the defined rules; contract value only via incorporation amendment; baseline untouched; omissions not netted | `test_VAR02_*` (2) | ✅ |
 | VAR-03 | Server-side valuation; segregation of duties (assessor ≠ recommender; raiser/assessor/recommender ≠ approver); state gates; access and idempotency | `test_valuation_*`, `test_segregation_*`, `test_approver_who_raised_*`, `test_state_machine_*`, `test_raise_rules_*` | ✅ |
 | WF-03 | Field event linked to variations without asserting entitlement; trace to clause, evidence and amendment | `test_events_link_to_variations_and_trace` | ✅ |
-| WF-02, PAY-01 | Mobilisation, payments | — | Phase 4–5 (payments deferred) |
+| WF-02 | Mobilisation item closure without evidence blocked; exception only by a contracts approver with a recorded reason; second-person verification | `test_WF02_*`, `test_verification_is_by_a_second_person_*` | ✅ |
+| MOB-01 | Checklist generated at execution with discipline pack; start of work blocked until mandatory items close | `test_checklist_generated_*`, `test_start_work_gate_*` | ✅ |
+| MOB-02 | Enablers: readiness claimed with evidence and verified by another person; prerequisites; lateness against need-by; site item waits for its enabler | `test_enabler_readiness_rules`, `test_lateness_*`, `test_site_item_waits_*` | ✅ |
+| MOB-03 | Late enabler → dated delay event → variation, traceable; project-scoped access | `test_delay_event_*`, `test_access_is_project_scoped` | ✅ |
+| PAY-01 | Payments | — | Deferred |
 | REC-01 | Restore drill | — | Requires the pilot environment |

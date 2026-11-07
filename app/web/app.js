@@ -259,6 +259,9 @@ VIEWS.dashboard = async () => {
     <table><tr><th>User</th><th>Project roles</th><th></th></tr>${members.map(m => `<tr><td><b>${esc(m.username)}</b> <span class="small muted">${esc(m.full_name)}</span></td><td class="small">${esc(m.roles.join(", "))}${(m.directory_roles || []).map(r => ` <span class="pill info" title="From a directory group">${esc(r)} · directory</span>`).join("")}</td>
       <td>${isCoord ? `<button class="danger" data-rm="${esc(m.username)}">Remove</button>` : ""}</td></tr>`).join("")}</table>
     ${isCoord ? `<div class="row" style="margin-top:10px"><input id="m-user" placeholder="username"><select id="m-role">${["contracts_manager","legal_reviewer","contracts_approver","commercial_manager","qaqc_manager","hse_manager","construction_manager","project_controls","procurement_manager","auditor","registry_manager","project_coordinator"].map(r => `<option>${r}</option>`).join("")}</select><button class="primary" id="m-add">Add to project</button></div>` : ""}</div>
+  ${d.mobilisation ? `<div class="card"><div class="row"><h2>Mobilisation &amp; enablers</h2><span class="spacer"></span><a class="small" id="dash-mob">Open →</a></div>
+    <div class="row">${d.mobilisation.subcontracts.map(m => `<span class="small"><b class="mono">${esc(m.subcontract_number)}</b> ${m.status === "ACTIVE" ? pill("WORKING", "ok") : pill(`MOBILISING ${m.percent}%`, m.gate_passed ? "ok" : "warn")}</span>`).join(" ")}</div>
+    ${d.mobilisation.enabler_flags.length ? `<table><tr><th>Enabler</th><th>Needed by</th><th>Lateness</th></tr>${d.mobilisation.enabler_flags.map(f => `<tr class="click" data-dmob="${f.enabler_id}"><td><span class="mono">${esc(f.number)}</span> ${esc(f.name)}</td><td class="small"><span class="mono">${esc(f.subcontract_number)}</span> ${esc(f.need_by)}</td><td>${flagPill(f.state, f.late_days)}</td></tr>`).join("")}</table>` : ""}</div>` : ""}
   ${d.variations ? `<div class="card"><div class="row"><h2>Variations</h2><span class="spacer"></span><a class="small" id="dash-var">Open register →</a></div>
     <p>${d.variations.open} open · ${d.variations.awaiting_approval} awaiting approval · open additions <b class="mono">${inr(d.variations.open_exposure)}</b> · open omissions <b class="mono">${inr(d.variations.open_omissions)}</b> · approved not incorporated <b class="mono">${inr(d.variations.approved_not_incorporated)}</b></p>
     ${d.variations.notice_alerts.length ? `<table><tr><th>No.</th><th>Variation</th><th>Notice</th></tr>${d.variations.notice_alerts.map(a => `<tr class="click" data-dvar="${a.id}"><td class="mono">${esc(a.number)}</td><td>${esc(a.title)}</td><td>${noticePill(a)} <span class="small">${esc(a.message)}</span></td></tr>`).join("")}</table>` : ""}</div>` : ""}
@@ -269,6 +272,8 @@ VIEWS.dashboard = async () => {
     document.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => { if (!confirm(`Remove ${b.dataset.rm} from this project?`)) return; try { await api(`/api/v1/projects/${S.project}/members/${b.dataset.rm}`, { method: "DELETE" }); render(); } catch (e) {} });
     document.querySelectorAll("[data-ob]").forEach(r => r.onclick = () => go("obligations", { sub: r.dataset.sub, ob: r.dataset.ob }));
     $("#dash-var") && ($("#dash-var").onclick = () => go("variations"));
+    $("#dash-mob") && ($("#dash-mob").onclick = () => go("mobilisation"));
+    document.querySelectorAll("[data-dmob]").forEach(r => r.onclick = () => go("mobilisation", { mtab: "enablers", en: r.dataset.dmob }));
     document.querySelectorAll("[data-dvar]").forEach(r => r.onclick = () => go("variations", { vo: r.dataset.dvar, vsub: null }));
                document.querySelectorAll("[data-sub-open]").forEach(r => r.onclick = () => go("subcontracts", { sub: r.dataset.subOpen })); })}`;
 };
@@ -432,6 +437,149 @@ async function traceView(oid, p) {
       ${e.review_status === "SUBMITTED" ? `<div class="row"><button data-evr="${e.id}" data-d="ACCEPT">Accept &amp; close</button><button class="danger" data-evr="${e.id}" data-d="REJECT">Reject</button></div>` : ""}</div>`).join("") : `<p class="muted small">No evidence yet.</p>`}
     ${o.status !== "CLOSED" ? `<div class="row small" style="margin-top:8px"><select id="ev-rev">${revs.map(r => `<option value="${r.id}">${esc(r.label)}</option>`).join("")}</select><input id="ev-note" placeholder="note"><button class="primary" id="ev-go">Submit evidence</button></div>` : ""}`));
   return `<div class="card"><h2>Chain of evidence</h2><div class="chain">${parts.join(`<div class="arrow"></div>`)}</div></div>`;
+}
+
+// ---------------------------------------------------------------- mobilisation & enablers (ADR-0009)
+const ITEM_CLS = { VERIFIED: "ok", WAIVED: "warn", SUBMITTED: "info", OPEN: "" };
+const FLAG_CLS = { LATE: "bad", AT_RISK: "warn", READY: "ok", ON_TRACK: "info", ON_TIME: "ok" };
+const flagPill = (f, days) => pill(f.replaceAll("_", " ") + (days ? ` +${days} d` : ""), FLAG_CLS[f] || "");
+
+VIEWS.mobilisation = async () => {
+  const p = await api(`/api/v1/projects/${S.project}`);
+  const live = p.subcontracts.filter(s => ["EXECUTED", "ACTIVE"].includes(s.status));
+  S.mtab = S.mtab || (live.find(s => s.status === "EXECUTED")?.id || live[0]?.id || "enablers");
+  const tabs = `<div class="tabs">${live.map(s => `<a data-mtab="${s.id}" class="${s.id === S.mtab ? "on" : ""}">${esc(s.subcontract_number)} checklist ${s.status === "EXECUTED" ? pill("MOBILISING", "warn") : ""}</a>`).join("")}
+    <a data-mtab="enablers" class="${S.mtab === "enablers" ? "on" : ""}">Enabler register</a></div>`;
+  const body = S.mtab === "enablers" ? await enablerRegister(live) : await mobilisationChecklist(S.mtab);
+  return `<h1>Mobilisation &amp; enablers</h1><p class="sub">Work starts only when the mobilisation checklist is verified. Site enablers are planned and verified deliverables; their lateness is measured against each subcontract's need-by date — entitlement is assessed separately, on a variation.</p>
+  ${tabs}${body}
+  ${on(() => { document.querySelectorAll("[data-mtab]").forEach(a => a.onclick = () => { S.mtab = a.dataset.mtab; render(); }); bindMob(); })}`;
+};
+
+let bindMob = () => {};
+async function mobilisationChecklist(sid) {
+  const [m, docs, en] = await Promise.all([api(`/api/v1/subcontracts/${sid}/mobilisation`), api(`/api/v1/projects/${S.project}/documents`),
+                                           api(`/api/v1/projects/${S.project}/enablers`)]);
+  const r = m.readiness;
+  const revs = docs.flatMap(d => d.revisions.map(x => ({ id: x.id, label: `${d.document_number} rev ${x.revision} — ${d.title}` })));
+  bindMob = () => {
+    const act = (path, json, msg) => async () => { try { await api(path, { method: "POST", json }); toast(msg); render(); } catch (e) {} };
+    document.querySelectorAll("[data-msub]").forEach(b => b.onclick = () => {
+      const it = m.items.find(i => i.id === b.dataset.msub);
+      if (it.enabler) return act(`/api/v1/mobilisation-items/${it.id}/submit`, {}, "Submitted for verification")();
+      openModal(`<h2>${esc(it.code)} · submit evidence</h2><p class="small muted">${esc(it.evidence_required)}</p><div class="form">
+        <label>Document</label><select id="ms-doc">${revs.map(x => `<option value="${x.id}">${esc(x.label)}</option>`).join("")}</select>
+        <label>Note</label><input id="ms-note" placeholder="e.g. section 3 of the dossier"></div><button class="primary" id="ms-go">Submit for verification</button>`);
+      $("#ms-go").onclick = async () => { try { await api(`/api/v1/mobilisation-items/${it.id}/submit`, { method: "POST", json: { document_revision_id: $("#ms-doc").value, note: $("#ms-note").value } }); closeModal(); toast("Submitted for verification"); render(); } catch (e) {} };
+    });
+    document.querySelectorAll("[data-mver]").forEach(b => b.onclick = async () => {
+      let comment = ""; if (b.dataset.d === "REJECT") { comment = prompt("What is missing?"); if (!comment) return; }
+      act(`/api/v1/mobilisation-items/${b.dataset.mver}/verify`, { decision: b.dataset.d, comment }, b.dataset.d === "ACCEPT" ? "Verified" : "Returned")(); });
+    document.querySelectorAll("[data-mwaive]").forEach(b => b.onclick = () => {
+      openModal(`<h2>Close by exception</h2><p class="small muted">Recorded against your name in the audit trail. Use only where evidence genuinely cannot be provided before work starts.</p><div class="form">
+        <label>Reason</label><textarea id="mw-why" rows="3"></textarea><label>Follow-up due (optional)</label><input id="mw-exp" type="date"></div><button class="danger" id="mw-go">Record exception</button>`);
+      $("#mw-go").onclick = async () => { try { await api(`/api/v1/mobilisation-items/${b.dataset.mwaive}/exception`, { method: "POST", json: { reason: $("#mw-why").value, expires_on: $("#mw-exp").value || null } }); closeModal(); toast("Exception recorded"); render(); } catch (e) {} };
+    });
+    document.querySelectorAll("[data-menab]").forEach(s => s.onchange = act(`/api/v1/mobilisation-items/${s.dataset.menab}/enabler`, null, "Enabler linked"));
+    document.querySelectorAll("[data-menab]").forEach(s => s.onchange = async () => { try { await api(`/api/v1/mobilisation-items/${s.dataset.menab}/enabler`, { method: "POST", json: { enabler_id: s.value || null } }); toast("Enabler linked"); render(); } catch (e) {} });
+    $("#m-start") && ($("#m-start").onclick = async () => { if (!confirm(`Start work on ${m.subcontract_number}? The subcontract becomes ACTIVE.`)) return;
+      try { await api(`/api/v1/subcontracts/${sid}/transitions`, { method: "POST", json: { target: "ACTIVE" } }); toast("Work started — subcontract ACTIVE"); render(); } catch (e) {} });
+    $("#m-add") && ($("#m-add").onclick = () => {
+      openModal(`<h2>Add a checklist item</h2><div class="form"><label>Title</label><input id="ma-title"><label>Category</label><select id="ma-cat">${m.categories.map(c => `<option>${c}</option>`).join("")}</select>
+        <label>Responsible</label><select id="ma-resp"><option>SUBCONTRACTOR</option><option>EPC</option><option>EMPLOYER</option></select>
+        <label>Mandatory</label><select id="ma-mand"><option value="1">Yes — blocks start of work</option><option value="0">No</option></select>
+        <label>Due</label><input id="ma-due" type="date"><label>Evidence required</label><input id="ma-ev">
+        <label>Verified by</label><select id="ma-ver" multiple size="4">${["construction_manager","project_coordinator","qaqc_manager","hse_manager","commercial_manager","contracts_manager","project_controls"].map(x => `<option>${x}</option>`).join("")}</select></div>
+        <button class="primary" id="ma-go">Add</button>`);
+      $("#ma-go").onclick = async () => { try { await api(`/api/v1/subcontracts/${sid}/mobilisation/items`, { method: "POST", json: { title: $("#ma-title").value, category: $("#ma-cat").value,
+        responsible_party: $("#ma-resp").value, mandatory: $("#ma-mand").value === "1", due_date: $("#ma-due").value || null, evidence_required: $("#ma-ev").value,
+        verifier_roles: [...$("#ma-ver").selectedOptions].map(o => o.value) } }); closeModal(); toast("Item added"); render(); } catch (e) {} };
+    });
+  };
+  const canLink = m.items.some(i => i.actions.includes("link_enabler"));
+  return `<div class="grid g5">
+      <div class="kpi ${r.gate_passed ? "" : "warn"}"><div class="v">${r.percent}%</div><div class="l">Mandatory items closed (${r.mandatory_closed}/${r.mandatory})</div></div>
+      <div class="kpi"><div class="v">${r.awaiting_verification}</div><div class="l">Awaiting verification</div></div>
+      <div class="kpi ${r.waived ? "warn" : ""}"><div class="v">${r.waived}</div><div class="l">Closed by exception</div></div>
+      <div class="kpi ${r.overdue ? "bad" : ""}"><div class="v">${r.overdue}</div><div class="l">Overdue items</div></div>
+      <div class="kpi ${r.gate_passed ? "" : "bad"}"><div class="v" style="font-size:20px;line-height:34px">${m.status === "ACTIVE" ? "Working" : r.gate_passed ? "Ready" : "Blocked"}</div><div class="l">Start-of-work gate</div></div></div><br>
+    <div class="card"><div class="row"><h2>${esc(m.subcontract_number)} · mobilisation checklist</h2><span class="spacer"></span>
+      ${m.can_generate ? `<button id="m-add">+ Item</button>` : ""}
+      ${m.status === "EXECUTED" && m.can_start_work ? `<button class="primary" id="m-start" ${r.gate_passed ? "" : "disabled title='Close the mandatory items first'"}>Start work (→ Active)</button>` : ""}</div>
+      ${m.status === "EXECUTED" && !r.gate_passed ? `<p class="notice risk small">Start of work is blocked by ${r.blocking.length} mandatory item(s): ${r.blocking.map(b => `<b class="mono">${esc(b.code)}</b>`).join(", ")}.</p>` : ""}
+      <table><tr><th>Item</th><th>Responsible · due</th><th>Evidence</th><th>Status</th><th></th></tr>
+      ${m.items.map(i => `<tr><td><span class="mono small">${esc(i.code)}</span> ${esc(i.title)}${i.mandatory ? "" : ` <span class="small muted">(optional)</span>`}
+          <div class="small muted">${esc(i.evidence_required)} · verified by ${esc(i.verifier_roles.join(" / ").replaceAll("_", " "))}</div>
+          ${i.enabler ? `<div class="small">Needs <b class="mono">${esc(i.enabler.number)}</b> ${esc(i.enabler.name)} ${pill(i.enabler.status, i.enabler.status === "READY" ? "ok" : "warn")}</div>` : ""}
+          ${i.actions.includes("link_enabler") && ["EPC", "EMPLOYER"].includes(i.responsible_party) ? `<div class="small">Enabler <select data-menab="${i.id}"><option value="">(none)</option>${en.enablers.map(e => `<option value="${e.id}" ${i.enabler?.id === e.id ? "selected" : ""}>${esc(e.number)} ${esc(e.name)}</option>`).join("")}</select></div>` : ""}</td>
+        <td class="small">${esc(i.responsible_party.toLowerCase())}<div class="mono ${i.overdue ? "bad-text" : "muted"}">${esc(i.due_date || "")}${i.overdue ? " overdue" : ""}</div></td>
+        <td class="small">${i.evidence ? `<span class="mono" style="white-space:nowrap">${esc(i.evidence.document_number)} rev ${esc(i.evidence.revision)}</span>${i.submitted_by ? `<div class="muted">by ${esc(i.submitted_by)}</div>` : ""}` : i.exception ? `<i>Exception</i>: ${esc(i.exception.reason)} <div class="muted">${esc(i.exception.by)}${i.exception.expires_on ? " · follow up by " + esc(i.exception.expires_on) : ""}</div>` : "—"}
+          ${i.review_comment && i.status === "OPEN" ? `<div class="bad-text">Returned: ${esc(i.review_comment)}</div>` : ""}</td>
+        <td>${pill(i.status, ITEM_CLS[i.status])}${i.verified_by && i.status === "VERIFIED" ? `<div class="small muted">${esc(i.verified_by)}</div>` : ""}</td>
+        <td class="row" style="flex-wrap:nowrap">${i.actions.includes("submit") ? `<button data-msub="${i.id}">Submit</button>` : ""}
+          ${i.actions.includes("verify") ? `<button class="primary" data-mver="${i.id}" data-d="ACCEPT">Verify</button><button data-mver="${i.id}" data-d="REJECT">Return</button>` : ""}
+          ${i.actions.includes("waive") ? `<button class="danger" data-mwaive="${i.id}" title="Close by recorded exception">Exception</button>` : ""}</td></tr>`).join("")}</table>
+      ${canLink ? "" : ""}</div>`;
+}
+
+async function enablerRegister(live) {
+  const [d, docs] = await Promise.all([api(`/api/v1/projects/${S.project}/enablers`), api(`/api/v1/projects/${S.project}/documents`)]);
+  const subs = Object.fromEntries(live.map(s => [s.id, s.subcontract_number]));
+  const revs = docs.flatMap(x => x.revisions.map(r => ({ id: r.id, label: `${x.document_number} rev ${r.revision} — ${x.title}` })));
+  const sel = S.en && d.enablers.find(e => e.id === S.en);
+  bindMob = () => {
+    document.querySelectorAll("[data-en]").forEach(r => r.onclick = () => { S.en = r.dataset.en; render(); });
+    $("#en-new") && ($("#en-new").onclick = () => {
+      openModal(`<h2>New site enabler</h2><div class="form"><label>Type</label><select id="n-type">${d.types.map(t => `<option>${t}</option>`).join("")}</select>
+        <label>Name</label><input id="n-name" placeholder="e.g. Hydrotest water supply"><label>Location</label><input id="n-loc"><label>Capacity</label><input id="n-cap" placeholder="e.g. 250 kVA, 120 m3/h">
+        <label>Planned date</label><input id="n-plan" type="date"><label>Responsible</label><select id="n-resp"><option>EPC</option><option>EMPLOYER</option><option>SUBCONTRACTOR</option><option>OTHER</option></select>
+        <label>Cost allocation</label><select id="n-cost"><option>EPC</option><option>EMPLOYER</option><option>SUBCONTRACTOR</option><option>SHARED</option></select>
+        <label>Prerequisites</label><select id="n-dep" multiple size="4">${d.enablers.map(e => `<option value="${e.id}">${esc(e.number)} ${esc(e.name)}</option>`).join("")}</select></div>
+        <button class="primary" id="n-go">Create</button>`);
+      $("#n-go").onclick = async () => { try { const e = await api(`/api/v1/projects/${S.project}/enablers`, { method: "POST", json: { enabler_type: $("#n-type").value, name: $("#n-name").value,
+        location: $("#n-loc").value, capacity: $("#n-cap").value, planned_date: $("#n-plan").value, responsible_party: $("#n-resp").value, cost_allocation: $("#n-cost").value,
+        depends_on: [...$("#n-dep").selectedOptions].map(o => o.value) } }); closeModal(); S.en = e.id; toast(`${e.number} created`); render(); } catch (er) {} };
+    });
+    if (!sel) return;
+    const u = `/api/v1/enablers/${sel.id}`;
+    $("#e-fc") && ($("#e-fc").onclick = async () => { try { await api(u, { method: "PATCH", json: { forecast_date: $("#e-fcd").value || null } }); toast("Forecast updated"); render(); } catch (e) {} });
+    $("#e-link") && ($("#e-link").onclick = async () => { try { await api(`${u}/links`, { method: "POST", json: { subcontract_id: $("#e-lsub").value, need_by_date: $("#e-lneed").value, purpose: $("#e-lwhy").value } }); toast("Need-by date recorded"); render(); } catch (e) {} });
+    $("#e-ready") && ($("#e-ready").onclick = async () => { try { await api(`${u}/ready`, { method: "POST", json: { actual_date: $("#e-rd").value, document_revision_id: $("#e-rdoc").value } }); toast("Readiness claimed — awaiting verification"); render(); } catch (e) {} });
+    document.querySelectorAll("[data-ever]").forEach(b => b.onclick = async () => { let comment = ""; if (b.dataset.ever === "REJECT") { comment = prompt("Why is it not ready?"); if (!comment) return; }
+      try { await api(`${u}/verify`, { method: "POST", json: { decision: b.dataset.ever, comment } }); toast(b.dataset.ever === "ACCEPT" ? "Verified ready" : "Readiness rejected"); render(); } catch (e) {} });
+    document.querySelectorAll("[data-edelay]").forEach(b => b.onclick = async () => { try { const ev = await api(`${u}/delay-event`, { method: "POST", json: { subcontract_id: b.dataset.edelay } });
+      toast(`${ev.number} recorded — raise a variation from it if entitlement is claimed`); render(); } catch (e) {} });
+  };
+  const s = d.summary;
+  return `<div class="grid g5">
+      <div class="kpi"><div class="v">${s.total}</div><div class="l">Enablers</div></div>
+      <div class="kpi"><div class="v">${s.ready}</div><div class="l">Verified ready</div></div>
+      <div class="kpi ${s.awaiting_verification ? "warn" : ""}"><div class="v">${s.awaiting_verification}</div><div class="l">Readiness awaiting verification</div></div>
+      <div class="kpi ${s.at_risk ? "warn" : ""}"><div class="v">${s.at_risk}</div><div class="l">At risk (forecast after need-by)</div></div>
+      <div class="kpi ${s.late ? "bad" : ""}"><div class="v">${s.late}</div><div class="l">Delivered late</div></div></div><br>
+  <div class="grid" style="grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)">
+  <div class="card"><div class="row"><h2>Enabler register</h2><span class="spacer"></span>${d.can_manage ? `<button class="primary" id="en-new">+ Enabler</button>` : ""}</div>
+    <table><tr><th>No.</th><th>Enabler</th><th>Planned</th><th>Available</th><th>Needed by</th><th>Status</th></tr>
+    ${d.enablers.map(e => `<tr class="click" data-en="${e.id}" style="${e.id === S.en ? "background:#f2f9f9" : ""}"><td class="mono">${esc(e.number)}</td>
+      <td>${esc(e.name)}<div class="small muted">${esc(e.type.replaceAll("_", " ").toLowerCase())}${e.location ? " · " + esc(e.location) : ""}</div></td>
+      <td class="mono small">${esc(e.planned_date)}</td><td class="mono small">${esc(e.actual_date || e.forecast_date || e.planned_date)}<div class="muted">${e.actual_date ? "actual" : e.forecast_date ? "forecast" : "planned"}</div></td>
+      <td class="small">${e.links.map(l => `<div><span class="mono">${esc(l.subcontract_number)}</span> ${esc(l.need_by)} ${l.late_days ? flagPill(l.state, l.late_days) : ""}</div>`).join("") || "—"}</td>
+      <td>${flagPill(e.flag)}${e.status === "READY_CLAIMED" ? " " + pill("CLAIMED", "info") : ""}</td></tr>`).join("")}</table></div>
+  <div>${sel ? `<div class="card"><div class="row"><h2>${esc(sel.number)} · ${esc(sel.name)}</h2><span class="spacer"></span>${flagPill(sel.flag)}</div>
+      <p class="small muted">${esc(sel.type.replaceAll("_", " ").toLowerCase())} · ${esc(sel.location || "")} ${sel.capacity ? "· " + esc(sel.capacity) : ""} · responsible ${esc(sel.responsible_party)} · cost ${esc(sel.cost_allocation)} · owner ${esc(sel.owner || "—")}</p>
+      ${sel.notes ? `<p>${esc(sel.notes)}</p>` : ""}
+      <table class="ladder2"><tr><th>Planned</th><th>Forecast</th><th>Actual</th><th>Status</th></tr><tr><td class="mono">${esc(sel.planned_date)}</td><td class="mono">${esc(sel.forecast_date || "—")}</td><td class="mono">${esc(sel.actual_date || "—")}</td><td>${pill(sel.status)}</td></tr></table>
+      ${sel.prerequisites.length ? `<p class="small">Prerequisites: ${sel.prerequisites.map(x => `<span class="mono">${esc(x.number)}</span> ${pill(x.status, x.status === "READY" ? "ok" : "warn")}`).join(" ")}</p>` : ""}
+      ${sel.readiness_evidence ? `<p class="small">Readiness evidence <span class="mono">${esc(sel.readiness_evidence.document_number)} rev ${esc(sel.readiness_evidence.revision)}</span> · claimed by ${esc(sel.claimed_by || "—")}${sel.verified_by ? ` · verified by ${esc(sel.verified_by)}` : ""}</p>` : ""}
+      <h3>Who needs it</h3>${sel.links.length ? `<table><tr><th>Subcontract · purpose</th><th>Need-by</th><th>Lateness</th></tr>${sel.links.map(l => `<tr><td><span class="mono">${esc(l.subcontract_number)}</span><div class="small muted">${esc(l.purpose)}</div></td><td class="mono small">${esc(l.need_by)}</td><td>${flagPill(l.state, l.late_days)}
+        ${l.late_days && d.can_record_event ? `<div style="margin-top:6px"><button data-edelay="${l.subcontract_id}" title="Record a dated delay event for this subcontract">Record delay event</button></div>` : ""}</td></tr>`).join("")}</table>` : `<p class="small muted">No subcontract linked yet.</p>`}
+      ${sel.events.length ? `<p class="small">Delay events: ${sel.events.map(x => `<span class="mono">${esc(x.number)}</span> (${esc(x.occurred_on)})`).join(", ")} — see Variations.</p>` : ""}
+      ${d.can_manage && sel.status !== "READY" ? `<h3>Update</h3>
+        <div class="row"><label class="small">Forecast <input id="e-fcd" type="date" value="${esc(sel.forecast_date || "")}"></label><button id="e-fc">Save forecast</button></div>
+        <div class="row"><select id="e-lsub">${live.map(x => `<option value="${x.id}">${esc(x.subcontract_number)}</option>`).join("")}</select><input id="e-lneed" type="date" title="need-by date"><input id="e-lwhy" placeholder="needed for…"><button id="e-link">Link / set need-by</button></div>
+        ${sel.status === "PLANNED" ? `<div class="row"><label class="small">Ready on <input id="e-rd" type="date" value="${new Date().toISOString().slice(0, 10)}"></label><select id="e-rdoc">${revs.map(x => `<option value="${x.id}">${esc(x.label)}</option>`).join("")}</select><button class="primary" id="e-ready">Claim ready</button></div>` : ""}` : ""}
+      ${d.can_verify && sel.status === "READY_CLAIMED" ? `<div class="row"><button class="primary" data-ever="ACCEPT">Verify ready</button><button data-ever="REJECT">Not ready</button></div>` : ""}
+    </div>` : `<div class="card"><p class="muted">Select an enabler to see who needs it, its lateness and readiness evidence.</p></div>`}</div></div>`;
 }
 
 // ---------------------------------------------------------------- variations (ADR-0008)

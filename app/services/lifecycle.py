@@ -55,6 +55,9 @@ def transition(db: Session, sub: Subcontract, target: str, user: User, reason: s
             raise HTTPException(409, {"code": "RELEASE_BLOCKED", "message": "Flow-down release gate failed", "gate": gate})
     if target == "EXECUTED":
         execute(db, sub, user)
+    if target == "ACTIVE":           # ADR-0009: start of work needs a verified mobilisation checklist
+        from app.services.mobilisation import start_work_gate
+        start_work_gate(db, sub)
     before = sub.status
     sub.status = target
     audit.record(db, user.id, "subcontract.transition", "Subcontract", sub.id, project_id=sub.project_id,
@@ -84,6 +87,8 @@ def execute(db: Session, sub: Subcontract, user: User) -> None:
                     "flowdown": [{"mapping_id": m.id, "disposition": m.disposition} for m in maps],
                     "release_exception": sub.release_exception}
     generate_obligations(db, sub, user.id)
+    from app.services.mobilisation import generate as generate_checklist
+    generate_checklist(db, sub, user.id)
 
 
 def add_days(start: date, n: int, basis: str) -> date:

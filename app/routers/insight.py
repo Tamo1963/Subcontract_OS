@@ -1,5 +1,5 @@
 """Knowledge queries, portfolio dashboard and audit trail."""
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -61,6 +61,7 @@ def dashboard(pid: str, user: User = Depends(current_user), db: Session = Depend
                       "conflicts": sum(r[0] == "CONFLICT" for r in revs),
                       "pending_assertions": len(pending_assert)},
         "variations": _variation_kpis(db, pid, subs),
+        "mobilisation": _mobilisation_kpis(db, pid, subs),
         "overdue_obligations": [o for o in obs if o["overdue"]],
         "upcoming_obligations": upcoming,
     }
@@ -97,3 +98,22 @@ def _variation_kpis(db, pid, subs):
             "notice_alerts": [{"id": v.id, "number": v.variation_number, "title": v.title,
                                "subcontract_id": v.subcontract_id, **V.notice_status(v)}
                               for v in open_vs if V.notice_status(v)["at_risk"] or V.notice_status(v)["status"] == "PENDING"]}
+
+
+def _mobilisation_kpis(db, pid, subs):
+    from app.models import Enabler, EnablerLink
+    from app.services import mobilisation as M
+    mob = [{"subcontract_id": s.id, "subcontract_number": s.subcontract_number, "status": s.status,
+            **{k: v for k, v in M.readiness(db, s).items() if k != "blocking"}}
+           for s in subs if s.status in ("EXECUTED", "ACTIVE")]
+    flags = []
+    for e in db.scalars(select(Enabler).where(Enabler.project_id == pid)):
+        for link in db.scalars(select(EnablerLink).where(EnablerLink.enabler_id == e.id)):
+            v = M.link_view(e, link)
+            if v["state"] in ("LATE", "AT_RISK") and not (v["state"] == "LATE" and e.status == "READY"
+                                                         and v["available"] < (date.today() - timedelta(days=30)).isoformat()):
+                sub = next((s for s in subs if s.id == link.subcontract_id), None)
+                flags.append({"enabler_id": e.id, "number": e.enabler_number, "name": e.name, "status": e.status,
+                              "subcontract_number": sub.subcontract_number if sub else "?", **v})
+    flags.sort(key=lambda f: -f["late_days"])
+    return {"subcontracts": mob, "enabler_flags": flags}

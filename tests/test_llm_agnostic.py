@@ -54,7 +54,7 @@ def assign(client, **purposes):
     assert r.status_code == 200, r.text
 
 
-def new_draft(client, world, number="SC-101-03", discipline="CIVIL"):
+def new_draft(client, world, number="SC-101-09", discipline="CIVIL"):
     p = client.get(f"/api/v1/projects/{world['project_id']}", headers=H("anita.contracts")).json()
     deccan = [e["subcontractor_id"] for e in p["eligible_subcontractors"] if e["package"] == "Pipe-rack foundations"][0]
     return client.post("/api/v1/subcontracts", headers=H("anita.contracts"), json={
@@ -168,7 +168,7 @@ def test_restricted_content_never_sent_to_cloud_provider(client, world, fake):
     assert f.requests == [] and "policy: RESTRICTED" in rows[0]["proposal_method"]
     private = register(client, name="Private", provider_type="vllm", base_url="http://gpu:8001/v1", data_zone="PRIVATE")
     assign(client, flowdown=private["id"])
-    rows = client.post(f"/api/v1/subcontracts/{new_draft(client, world, 'SC-101-04')}/flowdown-mappings/generate",
+    rows = client.post(f"/api/v1/subcontracts/{new_draft(client, world, 'SC-101-08')}/flowdown-mappings/generate",
                        headers=H("anita.contracts")).json()
     assert f.requests and rows[0]["proposal_method"].startswith("llm:Private")
 

@@ -19,6 +19,7 @@ USERS = [  # username, full name, global roles, clearance
     ("vikram.legal", "Vikram Rao - Legal Reviewer", [], "RESTRICTED"),
     ("meera.approver", "Meera Iyer - Contracts Approver", [], "RESTRICTED"),
     ("kabir.commercial", "Kabir Shah - Commercial Manager", [], "RESTRICTED"),
+    ("rohan.site", "Rohan Iyer - Construction Manager", [], "CONFIDENTIAL"),
     ("arjun.qaqc", "Arjun Mehta - QA/QC Manager", [], "CONFIDENTIAL"),
     ("sana.hse", "Sana Khan - HSE Manager", [], "CONFIDENTIAL"),
     ("dev.audit", "Dev Patel - Auditor", [], "RESTRICTED"),
@@ -26,6 +27,7 @@ USERS = [  # username, full name, global roles, clearance
 ]
 P101_ROLES = {"anita.contracts": ["contracts_manager"], "vikram.legal": ["legal_reviewer"],
               "meera.approver": ["contracts_approver"], "kabir.commercial": ["commercial_manager"],
+              "rohan.site": ["construction_manager"],
               "arjun.qaqc": ["qaqc_manager"],
               "sana.hse": ["hse_manager"], "dev.audit": ["auditor"], "ravi.registry": ["registry_manager"]}
 
@@ -58,6 +60,131 @@ def upload(c, who, project_id, path: Path, number, rev, dtype, **extra):
                          files={"file": (path.name, f.read())}))
 
 
+def decide_rows(c, rows, overrides):
+    """Legal decides every flow-down row: overrides first, else the machine proposal is accepted."""
+    for m in rows:
+        disp, why, treat = overrides.get(m["clause_reference"], (m["proposed_disposition"],
+                                                                 "Proposal reviewed and accepted.", None))
+        if m["source_document"] == "EPC-101-GCC" and m["clause_reference"] == "8.4":
+            disp, why, treat = "NOT_APPLICABLE", ("Amended by EPC-101-PC cl. 8.4, which takes precedence; flowed "
+                                                  "down under that row."), None
+        if m["source_document"] == "EPC-101-PC" and m["clause_reference"] == "8.4":
+            disp, why, treat = "ADAPTED", "PC amends GCC 8.4 to 10 days; subcontract notice set at 7 days.", \
+                               "Subcontractor shall notify the Contractor within 7 days of becoming aware of a delay event."
+        ok(c.post(f"/api/v1/flowdown-mappings/{m['id']}/decision", headers={"X-User": "vikram.legal"},
+                  json={"disposition": disp, "rationale": why, "subcontract_treatment": treat}))
+
+
+def seed_enablers(c, pid, sc1):
+    """Site enablers (ADR-0009). Dates are relative to today so lateness is live."""
+    H = lambda u: {"X-User": u}   # noqa: E731
+    day = lambda n: (date.today() + timedelta(days=n)).isoformat()  # noqa: E731
+    hnd = upload(c, "rohan.site", pid, SAMPLES / "HND-EN-001_Work_Front_Handover.txt", "HND-EN-001", "0",
+                 "CORRESPONDENCE", title="Work-front handover certificate PR-1/PR-2", source_party="EPC_CONTRACTOR")
+    ok(c.post(f"/api/v1/revisions/{hnd['revision_id']}/approve", headers=H("vikram.legal"), json={}))
+    spec = [  # number order matters: EN-001..EN-007
+        ("WORK_FRONT", "Work fronts PR-1 and PR-2 (pipe rack)", "Unit 100 pipe rack", "", -60, -58, [(sc1, -55, "piping erection start")]),
+        ("POWER", "Construction power 415 V, Unit 100 (DB-07)", "Unit 100", "250 kVA", -60, -57, [(sc1, -55, "welding sets and tools")]),
+        ("LAYDOWN_AREA", "Laydown and pipe-spool yard LD-2", "North-east yard", "6,000 m2", -65, -62, [(sc1, -55, "spool storage")]),
+        ("WORK_FRONT", "Work front PR-3 (pipe rack)", "Unit 100 pipe rack, grid 12-20", "", -45, -14, [(sc1, -45, "PR-3 piping erection")]),
+        ("WATER", "Hydrotest water supply with filling pumps", "Unit 100 test point TW-3", "120 m3/h", 20, None, [(sc1, 25, "hydrotest of test packs TP-0010 onwards")]),
+        ("WORK_FRONT", "Substation SS-1 building handed over for E&I", "Substation SS-1", "", -5, None, []),
+        ("CRANE", "250 t crawler crane for PR-4 heavy lifts", "Unit 100", "250 t", 40, None, [(sc1, 45, "PR-4 module lifts")]),
+    ]
+    ids = {}
+    for n, (etype, name, loc, cap, planned, ready, links) in enumerate(spec, 1):
+        e = ok(c.post(f"/api/v1/projects/{pid}/enablers", headers=H("rohan.site"), json={
+            "enabler_type": etype, "name": name, "location": loc, "capacity": cap, "planned_date": day(planned),
+            "responsible_party": "EPC", "cost_allocation": "EPC",
+            "depends_on": [ids["EN-002"]] if n == 5 else []}))
+        ids[e["number"]] = e["id"]
+        for sid, need, why in links:
+            ok(c.post(f"/api/v1/enablers/{e['id']}/links", headers=H("rohan.site"),
+                      json={"subcontract_id": sid, "need_by_date": day(need), "purpose": why}))
+        if ready is not None:
+            ok(c.post(f"/api/v1/enablers/{e['id']}/ready", headers=H("rohan.site"),
+                      json={"actual_date": day(ready), "document_revision_id": hnd["revision_id"]}))
+            ok(c.post(f"/api/v1/enablers/{e['id']}/verify", headers=H("priya.coord"), json={"decision": "ACCEPT"}))
+    ok(c.patch(f"/api/v1/enablers/{ids['EN-005']}", headers=H("rohan.site"), json={"forecast_date": day(35)}))
+    ok(c.patch(f"/api/v1/enablers/{ids['EN-006']}", headers=H("rohan.site"), json={"forecast_date": day(12),
+              "notes": "Cable trench civil works late; building roofing incomplete."}))
+    return ids
+
+
+def mobilise(c, pid, sid, dossier_no, enablers, complete):
+    """Submit the dossier as evidence and have the right second person verify each item."""
+    H = lambda u: {"X-User": u}   # noqa: E731
+    dossier = upload(c, "anita.contracts", pid, SAMPLES / f"{dossier_no}_Mobilisation_Dossier.txt", dossier_no, "0",
+                     "CORRESPONDENCE", title="Mobilisation dossier", subcontract_id=sid, source_party="SUBCONTRACTOR")
+    items = ok(c.get(f"/api/v1/subcontracts/{sid}/mobilisation", headers=H("anita.contracts")))["items"]
+    verifier = {"commercial_manager": "kabir.commercial", "contracts_manager": "kabir.commercial",
+                "hse_manager": "sana.hse", "qaqc_manager": "arjun.qaqc", "construction_manager": "rohan.site",
+                "project_coordinator": "rohan.site", "project_controls": "rohan.site"}
+    site_enabler = {"SITE-02": "EN-001", "SITE-03": "EN-002", "SITE-04": "EN-003"} if complete else \
+                   {"SITE-02": "EN-006", "SITE-03": "EN-002"}
+    plan = ({} if complete else {"DOC-01": "verify", "DOC-02": "verify", "DOC-03": "verify", "DOC-05": "verify",
+                                 "RES-01": "verify", "ELE-02": "submit", "DOC-04": "submit", "RES-02": "submit"})
+    for it in items:
+        code = it["code"]
+        if code in site_enabler:
+            ok(c.post(f"/api/v1/mobilisation-items/{it['id']}/enabler", headers=H("anita.contracts"),
+                      json={"enabler_id": enablers[site_enabler[code]]}))
+        action = "verify" if complete else plan.get(code)
+        if code == "SITE-05" and complete:
+            ok(c.post(f"/api/v1/mobilisation-items/{it['id']}/exception", headers=H("meera.approver"), json={
+                "reason": "Shared EPC site office used until the subcontractor's cabins arrive; welfare checked by HSE."}))
+            continue
+        if not action:
+            continue
+        if code in site_enabler:
+            r = c.post(f"/api/v1/mobilisation-items/{it['id']}/submit", headers=H("rohan.site"), json={})
+            if r.status_code != 200:
+                continue          # enabler not ready yet: the item stays open
+        else:
+            ok(c.post(f"/api/v1/mobilisation-items/{it['id']}/submit", headers=H("anita.contracts"),
+                      json={"document_revision_id": dossier["revision_id"], "note": f"Dossier section for {code}"}))
+        if action == "verify":
+            who = verifier[it["verifier_roles"][0]]
+            if code in site_enabler:
+                who = "priya.coord"
+            ok(c.post(f"/api/v1/mobilisation-items/{it['id']}/verify", headers=H(who), json={"decision": "ACCEPT"}))
+
+
+def seed_sc3(c, pid, mcid, konkan_id, enablers):
+    """SC-101-03 (E&I): executed, still mobilising; held by the late substation handover (EN-006)."""
+    H = lambda u: {"X-User": u}   # noqa: E731
+    sc3 = ok(c.post("/api/v1/subcontracts", headers={**H("anita.contracts"), "Idempotency-Key": "seed-sc-101-03"}, json={
+        "project_id": pid, "main_contract_id": mcid, "subcontractor_id": konkan_id, "subcontract_number": "SC-101-03",
+        "scope_summary": "Electrical and instrumentation installation, Unit 100", "discipline": "ELECTRICAL",
+        "currency": "INR", "contract_value": "48000000.00"}))
+    rows = ok(c.post(f"/api/v1/subcontracts/{sc3['id']}/flowdown-mappings/generate", headers=H("anita.contracts")))
+    decide_rows(c, rows, {
+        "8.7": ("COMMERCIAL_DEVIATION", "LDs flowed down at 0.5%/week capped at 5% (approved deviation).",
+                "Subcontract LDs 0.5% per week, cap 5% of Subcontract Price, mapped to E&I mechanical completion."),
+        "17.1": ("PROJECT_SPECIFIC", "Indemnity limited to subcontract scope; cap 100% of subcontract value.",
+                 "Special Condition SC-7: indemnity and cap."),
+        "18.1": ("PROJECT_SPECIFIC", "Insurances sized to subcontract value.",
+                 "Special Condition SC-8: insurances within 14 days of Commencement Date."),
+        "15.2": ("ADAPTED", "Termination for default with 7-day cure period.", "7-day cure notice."),
+        "20.1": ("ADAPTED", "Arbitration flows down with joinder.", "Arbitration, seat New Delhi, joinder."),
+    })
+    for target, who in (("TECHNICAL_REVIEW", "anita.contracts"), ("COMMERCIAL_REVIEW", "anita.contracts"),
+                        ("LEGAL_REVIEW", "anita.contracts"), ("APPROVAL_PENDING", "vikram.legal"),
+                        ("APPROVED_FOR_EXECUTION", "meera.approver")):
+        ok(c.post(f"/api/v1/subcontracts/{sc3['id']}/transitions", headers=H(who), json={"target": target}))
+    signed = upload(c, "anita.contracts", pid, SAMPLES / "SC-101-03-Agreement_signed.txt", "SC-101-03-AGR", "0",
+                    "SUBCONTRACT", title="Subcontract Agreement (signed)", subcontract_id=sc3["id"],
+                    source_party="EPC_CONTRACTOR")
+    ok(c.post(f"/api/v1/revisions/{signed['revision_id']}/approve", headers=H("vikram.legal"), json={}))
+    ok(c.post(f"/api/v1/subcontracts/{sc3['id']}/transitions", headers=H("anita.contracts"), json={"target": "EXECUTED"}))
+    for code, need, why in (("EN-006", 3, "E&I installation start in SS-1"), ("EN-002", 5, "temporary power for SS-1")):
+        ok(c.post(f"/api/v1/enablers/{enablers[code]}/links", headers=H("rohan.site"),
+                  json={"subcontract_id": sc3["id"], "need_by_date": (date.today() + timedelta(days=need)).isoformat(),
+                        "purpose": why}))
+    mobilise(c, pid, sc3["id"], "MOB-SC-101-03", enablers, complete=False)
+    return sc3
+
+
 def run(c):
     H = lambda u: {"X-User": u}   # noqa: E731
     # Registry ---------------------------------------------------------------
@@ -67,7 +194,7 @@ def run(c):
     deccan = ok(c.post("/api/v1/subcontractors", headers=H("ravi.registry"), json={
         "legal_name": "Deccan Civil Constructions Ltd", "registration_number": "U45200TG2009PLC064871",
         "country_code": "IN", "disciplines": ["CIVIL"]}))
-    ok(c.post("/api/v1/subcontractors", headers=H("ravi.registry"), json={
+    konkan = ok(c.post("/api/v1/subcontractors", headers=H("ravi.registry"), json={
         "legal_name": "Konkan Electricals LLP", "registration_number": "AAK-4471", "country_code": "IN",
         "disciplines": ["ELECTRICAL"]}))
 
@@ -93,6 +220,8 @@ def run(c):
               json={"subcontractor_id": deccan["id"], "package": "Pipe-rack foundations"}))
     ok(c.post(f"/api/v1/projects/{p202['id']}/subcontractors", headers=H("priya.coord"),
               json={"subcontractor_id": shakti["id"], "package": "Inverter-station mechanical works"}))
+    ok(c.post(f"/api/v1/projects/{p101['id']}/subcontractors", headers=H("priya.coord"),
+              json={"subcontractor_id": konkan["id"], "package": "Unit 100 electrical & instrumentation"}))
 
     # Main-contract documents -> governing revisions -------------------------
     pid, mcid = p101["id"], mc101["id"]
@@ -124,17 +253,7 @@ def run(c):
         "18.1": ("PROJECT_SPECIFIC", "CAR and third-party insurance sized to subcontract value.",
                  "Special Condition SC-8: insurances and certificates within 14 days of Commencement Date."),
     }
-    for m in rows:
-        disp, why, treat = overrides.get(m["clause_reference"], (m["proposed_disposition"],
-                                                                 "Proposal reviewed and accepted.", None))
-        if m["source_document"] == "EPC-101-GCC" and m["clause_reference"] == "8.4":
-            disp, why, treat = "NOT_APPLICABLE", ("Amended by EPC-101-PC cl. 8.4, which takes precedence; flowed "
-                                                  "down under that row."), None
-        if m["source_document"] == "EPC-101-PC" and m["clause_reference"] == "8.4":
-            disp, why, treat = "ADAPTED", "PC amends GCC 8.4 to 10 days; subcontract notice set at 7 days.", \
-                               "Subcontractor shall notify the Contractor within 7 days of becoming aware of a delay event."
-        ok(c.post(f"/api/v1/flowdown-mappings/{m['id']}/decision", headers=H("vikram.legal"),
-                  json={"disposition": disp, "rationale": why, "subcontract_treatment": treat}))
+    decide_rows(c, rows, overrides)
     for target, who in (("TECHNICAL_REVIEW", "anita.contracts"), ("COMMERCIAL_REVIEW", "anita.contracts"),
                         ("LEGAL_REVIEW", "anita.contracts"), ("APPROVAL_PENDING", "vikram.legal"),
                         ("APPROVED_FOR_EXECUTION", "meera.approver")):
@@ -143,9 +262,10 @@ def run(c):
                     "SUBCONTRACT", title="Subcontract Agreement (signed)", subcontract_id=sc1["id"],
                     source_party="EPC_CONTRACTOR")
     ok(c.post(f"/api/v1/revisions/{signed['revision_id']}/approve", headers=H("vikram.legal"), json={}))
-    for target in ("EXECUTED", "ACTIVE"):
-        ok(c.post(f"/api/v1/subcontracts/{sc1['id']}/transitions", headers=H("anita.contracts"), json={"target": target}))
-
+    ok(c.post(f"/api/v1/subcontracts/{sc1['id']}/transitions", headers=H("anita.contracts"), json={"target": "EXECUTED"}))
+    enablers = seed_enablers(c, pid, sc1["id"])
+    mobilise(c, pid, sc1["id"], "MOB-SC-101-01", enablers, complete=True)
+    ok(c.post(f"/api/v1/subcontracts/{sc1['id']}/transitions", headers=H("anita.contracts"), json={"target": "ACTIVE"}))
     obligations = ok(c.get(f"/api/v1/subcontracts/{sc1['id']}/obligations", headers=H("anita.contracts")))
     by_type = {}
     for o in obligations:
@@ -176,7 +296,8 @@ def run(c):
     am = ok(c.post(f"/api/v1/subcontracts/{sc1['id']}/amendments", headers=H("anita.contracts"), json={
         "field": "contract_value", "new_value": "126850000.00", "reason": "Amendment 1: added supports scope (VO-001)"}))
     ok(c.post(f"/api/v1/amendments/{am['id']}/approve", headers=H("meera.approver")))
-    seed_variations(c, pid, sc1["id"], ltr["revision_id"])
+    seed_variations(c, pid, sc1["id"], ltr["revision_id"], enablers)
+    sc3 = seed_sc3(c, pid, mcid, konkan["id"], enablers)
 
     # Subcontract SC-101-02 (civil): stuck at the release gate --------------
     sc2 = ok(c.post("/api/v1/subcontracts", headers=H("anita.contracts"), json={
@@ -190,11 +311,12 @@ def run(c):
                       json={"disposition": m["proposed_disposition"], "rationale": "Proposal accepted."}))
     for target in ("TECHNICAL_REVIEW", "COMMERCIAL_REVIEW", "LEGAL_REVIEW", "APPROVAL_PENDING"):
         ok(c.post(f"/api/v1/subcontracts/{sc2['id']}/transitions", headers=H("anita.contracts"), json={"target": target}))
-    return {"project_id": pid, "main_contract_id": mcid, "sc1": sc1["id"], "sc2": sc2["id"], "p202": p202["id"],
+    return {"project_id": pid, "main_contract_id": mcid, "sc1": sc1["id"], "sc2": sc2["id"], "sc3": sc3["id"],
+            "enablers": enablers, "p202": p202["id"],
             "shakti": shakti["id"]}
 
 
-def seed_variations(c, pid, sc, ltr_rev):
+def seed_variations(c, pid, sc, ltr_rev, enablers):
     """Three variations at different stages (ADR-0008). Dates are relative to today so the notice clocks live."""
     H = lambda u: {"X-User": u}   # noqa: E731
     day = lambda n: (date.today() - timedelta(days=n)).isoformat()  # noqa: E731
@@ -238,7 +360,7 @@ def seed_variations(c, pid, sc, ltr_rev):
     # VAR-002: standing time at PR-3, notice given LATE -> held at notice review for legal
     ev2 = ok(c.post(f"/api/v1/projects/{pid}/events", headers=H("anita.contracts"), json={
         "event_type": "ACCESS_DELAY", "occurred_on": day(45), "location": "Pipe rack PR-3", "subcontract_id": sc,
-        "source_revision_id": ltr_rev,
+        "source_revision_id": ltr_rev, "enabler_id": enablers["EN-004"],
         "description": "Work front PR-3 not released on the planned date; civil foundations incomplete."}))
     v2 = ok(c.post(f"/api/v1/subcontracts/{sc}/variations", headers=H("anita.contracts"), json={
         "title": "Standing time - work front PR-3 not released", "origin_event_id": ev2["id"],

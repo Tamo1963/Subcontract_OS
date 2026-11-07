@@ -434,8 +434,81 @@ class ProjectEvent(Base):
     location: Mapped[str] = mapped_column(String(200), default="")
     description: Mapped[str] = mapped_column(Text)
     source_revision_id: Mapped[str | None] = mapped_column(ForeignKey("documents_revisions.id"), nullable=True)
+    enabler_id: Mapped[str | None] = mapped_column(ForeignKey("execution_enablers.id"), nullable=True)
     recorded_by: Mapped[str] = mapped_column(String(36))
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+# ---------------------------------------------------------------- mobilisation and site enablers (ADR-0009)
+class Enabler(Base):
+    """A project facility or condition that subcontract work depends on: work front, power, water, laydown,
+    crane, access road... Managed as a planned and verified deliverable, never informally."""
+    __tablename__ = "execution_enablers"
+    __table_args__ = (UniqueConstraint("project_id", "enabler_number"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects_projects.id"), index=True)
+    enabler_number: Mapped[str] = mapped_column(String(20))
+    enabler_type: Mapped[str] = mapped_column(String(30))
+    name: Mapped[str] = mapped_column(String(300))
+    location: Mapped[str] = mapped_column(String(200), default="")
+    capacity: Mapped[str] = mapped_column(String(200), default="")
+    responsible_party: Mapped[str] = mapped_column(String(20), default="EPC")     # EPC | EMPLOYER | SUBCONTRACTOR | OTHER
+    cost_allocation: Mapped[str] = mapped_column(String(20), default="EPC")
+    owner_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    planned_date: Mapped[str] = mapped_column(String(10))
+    forecast_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    actual_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="PLANNED")            # PLANNED | READY_CLAIMED | READY | WITHDRAWN
+    readiness_revision_id: Mapped[str | None] = mapped_column(ForeignKey("documents_revisions.id"), nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    verified_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class EnablerDependency(Base):
+    __tablename__ = "execution_enabler_dependencies"
+    enabler_id: Mapped[str] = mapped_column(ForeignKey("execution_enablers.id", ondelete="CASCADE"), primary_key=True)
+    depends_on_id: Mapped[str] = mapped_column(ForeignKey("execution_enablers.id", ondelete="CASCADE"), primary_key=True)
+
+
+class EnablerLink(Base):
+    """Which subcontract needs the enabler, and by when (the need-by date drives lateness)."""
+    __tablename__ = "execution_enabler_links"
+    __table_args__ = (UniqueConstraint("enabler_id", "subcontract_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    enabler_id: Mapped[str] = mapped_column(ForeignKey("execution_enablers.id", ondelete="CASCADE"), index=True)
+    subcontract_id: Mapped[str] = mapped_column(ForeignKey("contracts_subcontracts.id"), index=True)
+    need_by_date: Mapped[str] = mapped_column(String(10))
+    purpose: Mapped[str] = mapped_column(String(300), default="")
+
+
+class MobilisationItem(Base):
+    __tablename__ = "execution_mobilisation_items"
+    __table_args__ = (UniqueConstraint("subcontract_id", "item_code"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    subcontract_id: Mapped[str] = mapped_column(ForeignKey("contracts_subcontracts.id"), index=True)
+    item_code: Mapped[str] = mapped_column(String(20))
+    line_no: Mapped[int] = mapped_column(Integer)
+    category: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(300))
+    responsible_party: Mapped[str] = mapped_column(String(20))
+    mandatory: Mapped[bool] = mapped_column(Boolean, default=True)
+    due_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    evidence_required: Mapped[str] = mapped_column(Text, default="")
+    verifier_roles: Mapped[list] = mapped_column(JSON, default=list)
+    enabler_id: Mapped[str | None] = mapped_column(ForeignKey("execution_enablers.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="OPEN")      # OPEN | SUBMITTED | VERIFIED | WAIVED
+    evidence_revision_id: Mapped[str | None] = mapped_column(ForeignKey("documents_revisions.id"), nullable=True)
+    submitted_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_comment: Mapped[str] = mapped_column(Text, default="")
+    exception: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="TEMPLATE")   # TEMPLATE | MANUAL
 
 
 class Variation(Base):
