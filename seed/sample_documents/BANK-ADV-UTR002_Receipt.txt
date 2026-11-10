@@ -1,0 +1,3 @@
+Bank payment advice (fictional)
+
+RTGS UTR HDFCR52026101800456 to Shakti Piping Works against PA-002 (RA bill 1).

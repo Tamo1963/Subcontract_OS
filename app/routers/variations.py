@@ -568,6 +568,13 @@ def trace(vid: str, user: User = Depends(current_user), db: Session = Depends(ge
         node("Approval", f"decision-{v.id}", f"{v.status if v.status in ('REJECTED', 'WITHDRAWN') else 'APPROVED'} by "
              f"{names.get(v.decided_by)}")
         edges.append((v.id, "APPROVED_BY", f"decision-{v.id}"))
+    from app.models import PaymentAdvice, PaymentAdviceLine
+    for pl in db.scalars(select(PaymentAdviceLine).where(PaymentAdviceLine.source_type == "VARIATION",
+                                                         PaymentAdviceLine.source_id == v.id,
+                                                         PaymentAdviceLine.active.is_(True))):
+        pa = db.get(PaymentAdvice, pl.advice_id)
+        node("PaymentAdvice", pa.id, f"{pa.advice_number} ({pa.status})")
+        edges.append((pa.id, "VALUES", v.id))
     if v.amendment_id:
         a = db.get(Amendment, v.amendment_id)
         node("Amendment", a.id, f"Amendment {a.amendment_number}: {a.old_value} -> {a.new_value}")

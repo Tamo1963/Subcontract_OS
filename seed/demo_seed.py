@@ -20,6 +20,7 @@ USERS = [  # username, full name, global roles, clearance
     ("meera.approver", "Meera Iyer - Contracts Approver", [], "RESTRICTED"),
     ("kabir.commercial", "Kabir Shah - Commercial Manager", [], "RESTRICTED"),
     ("rohan.site", "Rohan Iyer - Construction Manager", [], "CONFIDENTIAL"),
+    ("lata.accounts", "Lata Nair - Accounts", [], "CONFIDENTIAL"),
     ("arjun.qaqc", "Arjun Mehta - QA/QC Manager", [], "CONFIDENTIAL"),
     ("sana.hse", "Sana Khan - HSE Manager", [], "CONFIDENTIAL"),
     ("dev.audit", "Dev Patel - Auditor", [], "RESTRICTED"),
@@ -27,7 +28,7 @@ USERS = [  # username, full name, global roles, clearance
 ]
 P101_ROLES = {"anita.contracts": ["contracts_manager"], "vikram.legal": ["legal_reviewer"],
               "meera.approver": ["contracts_approver"], "kabir.commercial": ["commercial_manager"],
-              "rohan.site": ["construction_manager"],
+              "rohan.site": ["construction_manager"], "lata.accounts": ["accounts"],
               "arjun.qaqc": ["qaqc_manager"],
               "sana.hse": ["hse_manager"], "dev.audit": ["auditor"], "ravi.registry": ["registry_manager"]}
 
@@ -298,6 +299,7 @@ def run(c):
     ok(c.post(f"/api/v1/amendments/{am['id']}/approve", headers=H("meera.approver")))
     seed_variations(c, pid, sc1["id"], ltr["revision_id"], enablers)
     sc3 = seed_sc3(c, pid, mcid, konkan["id"], enablers)
+    seed_payments(c, pid, sc1["id"])
 
     # Subcontract SC-101-02 (civil): stuck at the release gate --------------
     sc2 = ok(c.post("/api/v1/subcontracts", headers=H("anita.contracts"), json={
@@ -314,6 +316,66 @@ def run(c):
     return {"project_id": pid, "main_contract_id": mcid, "sc1": sc1["id"], "sc2": sc2["id"], "sc3": sc3["id"],
             "enablers": enablers, "p202": p202["id"],
             "shakti": shakti["id"]}
+
+
+def seed_payments(c, pid, sc):
+    """Payment terms, measurements and three advices (ADR-0010): PA-001 advance paid, PA-002 RA bill 1 paid,
+    PA-003 RA bill 2 + VAR-001 - debit note approved and with accounts; MB-003 awaiting verification."""
+    H = lambda u: {"X-User": u}   # noqa: E731
+    day = lambda n: (date.today() + timedelta(days=n)).isoformat()  # noqa: E731
+    ok(c.put(f"/api/v1/subcontracts/{sc}/payment-terms", headers=H("kabir.commercial"), json={
+        "retention_percent": "5", "retention_cap_percent": "5", "advance_amount": "12500000.00",
+        "advance_recovery_percent": "10", "gst_percent": "18", "tds_percent": "2", "payment_due_days": 30,
+        "source_reference": "SC-101-01 cl. 14 (Payment) and Schedule 3"}))
+
+    def doc(file, number, title, doc_type="CORRESPONDENCE"):
+        r = upload(c, "kabir.commercial", pid, SAMPLES / file, number, "0", doc_type, title=title, subcontract_id=sc,
+                   source_party="SUBCONTRACTOR")
+        return r["revision_id"]
+
+    def measure(file, number, period, lines, verify=True):
+        rev = doc(file, number, f"Measurement sheet {number}")
+        m = ok(c.post(f"/api/v1/subcontracts/{sc}/measurements", headers=H("kabir.commercial"), json={
+            "period_from": period[0], "period_to": period[1], "evidence_revision_id": rev, "lines": [
+                {"boq_ref": b, "description": d, "unit": u, "quantity": qy, "rate": r} for b, d, u, qy, r in lines]}))
+        if verify:
+            ok(c.post(f"/api/v1/measurements/{m['id']}/verify", headers=H("rohan.site"),
+                      json={"decision": "VERIFY", "comment": "Checked against site records and test-pack register."}))
+        return m
+
+    def advise(key, **body):
+        a = ok(c.post(f"/api/v1/subcontracts/{sc}/payment-advices",
+                      headers={**H("kabir.commercial"), "Idempotency-Key": key}, json=body))
+        ok(c.post(f"/api/v1/payment-advices/{a['id']}/decision", headers=H("kabir.commercial"), json={"action": "SUBMIT"}))
+        ok(c.post(f"/api/v1/payment-advices/{a['id']}/decision", headers=H("meera.approver"),
+                  json={"action": "APPROVE", "comment": "Checked against MB and terms."}))
+        return a
+
+    def pay(a, file, ref, mode, paid_on):
+        with open(SAMPLES / file, "rb") as fh:
+            ok(c.post(f"/api/v1/payment-advices/{a['id']}/payments", headers=H("lata.accounts"),
+                      files={"receipt": (file, fh.read(), "text/plain")},
+                      data={"paid_on": paid_on, "amount": a["net_payable"], "mode": mode, "payment_reference": ref}))
+
+    pa1 = advise("seed-pa-001", advance_amount="12500000.00", period_from=day(-62), period_to=day(-62))
+    pay(pa1, "BANK-ADV-UTR001_Receipt.txt", "HDFCN52026091100123", "NEFT", day(0))
+    m1 = measure("MB-SC-101-01-001_Measurement.txt", "MB-SC-101-01-001", (day(-60), day(-31)), [
+        ("2.01", "Spool fabrication, carbon steel", "dia-inch", "4200", "950.00"),
+        ("3.01", "Pipe erection, rack PR-1/PR-2", "m", "2800", "640.50")])
+    pa2 = advise("seed-pa-002", measurement_ids=[m1["id"]], period_from=day(-60), period_to=day(-31))
+    pay(pa2, "BANK-ADV-UTR002_Receipt.txt", "HDFCR52026101800456", "RTGS", day(0))
+    m2 = measure("MB-SC-101-01-002_Measurement.txt", "MB-SC-101-01-002", (day(-30), day(-1)), [
+        ("2.01", "Spool fabrication, carbon steel", "dia-inch", "5100", "950.00"),
+        ("3.01", "Pipe erection, rack PR-1/PR-2/PR-3", "m", "3600", "640.50"),
+        ("5.02", "Hydrotest of test packs", "pack", "12", "18500.00")])
+    var1 = next(v for v in ok(c.get(f"/api/v1/projects/{pid}/variations", headers=H("kabir.commercial")))["variations"]
+                if v["number"] == "VAR-001")
+    dn = doc("DN-SC-101-01-007_Debit_Note.txt", "DN-SC-101-01-007", "Debit note: scaffolding at PR-3")
+    advise("seed-pa-003", measurement_ids=[m2["id"]], variation_ids=[var1["id"]], period_from=day(-30), period_to=day(-1),
+           deductions=[{"kind": "DEBIT_NOTE", "description": "Scaffolding provided by EPC at PR-3 (DN-007)",
+                        "amount": "85000.00", "evidence_revision_id": dn}])
+    measure("MB-SC-101-01-003_Measurement.txt", "MB-SC-101-01-003", (day(-1), day(0)), [
+        ("3.01", "Pipe erection, rack PR-3", "m", "1450", "640.50")], verify=False)
 
 
 def seed_variations(c, pid, sc, ltr_rev, enablers):

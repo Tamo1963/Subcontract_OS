@@ -21,8 +21,17 @@ from app.models import (ContractClause, Document, DocumentRevision, ExtractionAs
 
 
 # ------------------------------------------------------------------ 1. capture and quarantine
-def validate_upload(filename: str, data: bytes) -> str:
+IMAGE_SIGNATURES = {".png": (b"\x89PNG\r\n\x1a\n",), ".jpg": (b"\xff\xd8\xff",), ".jpeg": (b"\xff\xd8\xff",)}
+
+
+def validate_upload(filename: str, data: bytes, allow_images: bool = False) -> str:
     ext = Path(filename).suffix.lower()
+    if allow_images and ext in IMAGE_SIGNATURES:      # scanned receipts (ADR-0010); no text extraction
+        if not data or not data.startswith(IMAGE_SIGNATURES[ext]):
+            raise HTTPException(422, {"code": "QUARANTINED", "message": "Content is not a valid image"})
+        if len(data) > config.MAX_UPLOAD_BYTES:
+            raise HTTPException(413, {"code": "QUARANTINED", "message": "File too large"})
+        return ext
     if ext not in config.ALLOWED_EXTENSIONS:
         raise HTTPException(415, {"code": "QUARANTINED", "message": f"File type {ext or '(none)'} not accepted"})
     if not data:
@@ -78,8 +87,9 @@ class IngestResult:
 def register_revision(db: Session, *, actor_id: str, project_id: str, document_number: str, revision_label: str,
                       document_type: str, title: str, filename: str, data: bytes, main_contract_id=None,
                       subcontract_id=None, source_party="EMPLOYER", security_classification="CONFIDENTIAL",
-                      issued_at=None, effective_from=None, source_channel="MANUAL_UPLOAD") -> IngestResult:
-    validate_upload(filename, data)
+                      issued_at=None, effective_from=None, source_channel="MANUAL_UPLOAD",
+                      allow_images=False) -> IngestResult:
+    validate_upload(filename, data, allow_images)
     digest, key = store_object(data)
 
     # Same content anywhere in the project -> duplicate; no new business records (DOC-01).

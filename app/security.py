@@ -25,7 +25,7 @@ PERMISSIONS: dict[str, set[str]] = {
     "project.admin": {"project_coordinator", "system_admin"},
     "project.read": {"project_coordinator", "contracts_manager", "commercial_manager", "legal_reviewer",
                      "auditor", "qaqc_manager", "hse_manager", "construction_manager", "registry_manager",
-                     "project_controls", "contracts_approver"},
+                     "project_controls", "contracts_approver", "finance_approver", "accounts"},
     "document.upload": {"project_coordinator", "contracts_manager", "commercial_manager", "qaqc_manager",
                         "hse_manager", "construction_manager"},
     "document.review": {"contracts_manager", "legal_reviewer"},
@@ -58,6 +58,14 @@ PERMISSIONS: dict[str, set[str]] = {
     "mobilisation.submit": {"contracts_manager", "construction_manager", "project_coordinator", "commercial_manager",
                             "qaqc_manager", "hse_manager"},
     "mobilisation.exception": {"contracts_approver"},
+    # Measurement and payment advice (ADR-0010)
+    "payment.terms": {"commercial_manager"},
+    "measurement.prepare": {"commercial_manager", "construction_manager", "project_controls"},
+    "measurement.verify": {"construction_manager", "project_controls", "qaqc_manager"},
+    "payment.prepare": {"commercial_manager"},
+    "payment.approve": {"contracts_approver", "finance_approver"},
+    "payment.record": {"accounts"},
+    "payment.read_queue": {"accounts", "finance_approver", "contracts_approver", "commercial_manager"},
 }
 
 

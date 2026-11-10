@@ -589,6 +589,127 @@ class VariationEvidence(Base):
     linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+# ---------------------------------------------------------------- measurement and payment advice (ADR-0010)
+class PaymentTerms(Base):
+    """Per-subcontract payment rules. Percentages are configuration, never hard-coded; each payment advice
+    keeps a snapshot of the terms it was calculated with."""
+    __tablename__ = "commercial_payment_terms"
+    subcontract_id: Mapped[str] = mapped_column(ForeignKey("contracts_subcontracts.id"), primary_key=True)
+    retention_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), default=Decimal("0"))
+    retention_cap_percent: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)  # of current value
+    advance_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
+    advance_recovery_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), default=Decimal("0"))
+    gst_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), default=Decimal("0"))
+    tds_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), default=Decimal("0"))
+    payment_due_days: Mapped[int] = mapped_column(Integer, default=30)
+    source_reference: Mapped[str] = mapped_column(String(300), default="")      # e.g. "SC-101-01 cl. 14, Schedule 3"
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    set_by: Mapped[str] = mapped_column(String(36))
+    set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Measurement(Base):
+    """A measurement sheet (MB / RA-bill measurement) for a period. Verified jointly before it can be paid."""
+    __tablename__ = "commercial_measurements"
+    __table_args__ = (UniqueConstraint("subcontract_id", "mb_number"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    subcontract_id: Mapped[str] = mapped_column(ForeignKey("contracts_subcontracts.id"), index=True)
+    mb_number: Mapped[str] = mapped_column(String(20))
+    period_from: Mapped[str] = mapped_column(String(10))
+    period_to: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(20), default="SUBMITTED")    # SUBMITTED | VERIFIED | RETURNED
+    evidence_revision_id: Mapped[str] = mapped_column(ForeignKey("documents_revisions.id"))
+    prepared_by: Mapped[str] = mapped_column(String(36))
+    prepared_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    verified_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    lines: Mapped[list["MeasurementLine"]] = relationship(back_populates="measurement", cascade="all, delete-orphan",
+                                                         order_by="MeasurementLine.line_no")
+
+
+class MeasurementLine(Base):
+    __tablename__ = "commercial_measurement_lines"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    measurement_id: Mapped[str] = mapped_column(ForeignKey("commercial_measurements.id", ondelete="CASCADE"), index=True)
+    line_no: Mapped[int] = mapped_column(Integer)
+    boq_ref: Mapped[str] = mapped_column(String(60))
+    description: Mapped[str] = mapped_column(String(500))
+    unit: Mapped[str] = mapped_column(String(20))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+    rate: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    measurement: Mapped["Measurement"] = relationship(back_populates="lines")
+
+
+class PaymentAdvice(Base):
+    """Prepared by commercial, approved by an approver, sent to accounts; accounts pays outside the system and
+    uploads the receipt. Amounts are computed by the server; `calculation` keeps every step and its inputs."""
+    __tablename__ = "commercial_payment_advices"
+    __table_args__ = (UniqueConstraint("subcontract_id", "advice_number"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects_projects.id"), index=True)
+    subcontract_id: Mapped[str] = mapped_column(ForeignKey("contracts_subcontracts.id"), index=True)
+    advice_number: Mapped[str] = mapped_column(String(20))
+    period_from: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    period_to: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="DRAFT")
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    work_value: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    advance_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
+    gross_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    retention_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    advance_recovery: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    other_deductions: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    gst_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    tds_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    net_payable: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    paid_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
+    terms_snapshot: Mapped[dict] = mapped_column(JSON)
+    calculation: Mapped[dict] = mapped_column(JSON)
+    prepared_by: Mapped[str] = mapped_column(String(36))
+    prepared_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    due_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    decision_comment: Mapped[str] = mapped_column(Text, default="")
+    lines: Mapped[list["PaymentAdviceLine"]] = relationship(back_populates="advice", cascade="all, delete-orphan",
+                                                           order_by="PaymentAdviceLine.line_no")
+
+
+class PaymentAdviceLine(Base):
+    """What the advice pays for (MEASUREMENT line, incorporated VARIATION, ADVANCE) or deducts (DEDUCTION).
+    `active` is cleared when the advice is cancelled, so the source can be advised again — never twice."""
+    __tablename__ = "commercial_payment_advice_lines"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    advice_id: Mapped[str] = mapped_column(ForeignKey("commercial_payment_advices.id", ondelete="CASCADE"), index=True)
+    line_no: Mapped[int] = mapped_column(Integer)
+    source_type: Mapped[str] = mapped_column(String(20))
+    source_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    description: Mapped[str] = mapped_column(String(500))
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    evidence_revision_id: Mapped[str | None] = mapped_column(ForeignKey("documents_revisions.id"), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    advice: Mapped["PaymentAdvice"] = relationship(back_populates="lines")
+
+
+class PaymentRecord(Base):
+    """Accounts' record of a payment made outside the system, with the uploaded receipt."""
+    __tablename__ = "commercial_payment_records"
+    __table_args__ = (UniqueConstraint("subcontract_id", "payment_reference"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    advice_id: Mapped[str] = mapped_column(ForeignKey("commercial_payment_advices.id"), index=True)
+    subcontract_id: Mapped[str] = mapped_column(ForeignKey("contracts_subcontracts.id"))
+    paid_on: Mapped[str] = mapped_column(String(10))
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    mode: Mapped[str] = mapped_column(String(20))            # NEFT | RTGS | IMPS | CHEQUE | OTHER
+    payment_reference: Mapped[str] = mapped_column(String(80))
+    receipt_revision_id: Mapped[str] = mapped_column(ForeignKey("documents_revisions.id"))
+    note: Mapped[str] = mapped_column(Text, default="")
+    recorded_by: Mapped[str] = mapped_column(String(36))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
 # ---------------------------------------------------------------- governance
 class AuditEvent(Base):
     """Append-only business-event ledger."""

@@ -101,3 +101,4 @@ td.mono,td.r,.ladder2 td{white-space:nowrap}
 .kpi .v.money{font-size:21px;line-height:34px}
 .bad-text{color:var(--high)}
 button[disabled]{opacity:.5;cursor:not-allowed}
+tr.tot td{border-top:2px solid var(--ink-2)}

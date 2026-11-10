@@ -259,6 +259,9 @@ VIEWS.dashboard = async () => {
     <table><tr><th>User</th><th>Project roles</th><th></th></tr>${members.map(m => `<tr><td><b>${esc(m.username)}</b> <span class="small muted">${esc(m.full_name)}</span></td><td class="small">${esc(m.roles.join(", "))}${(m.directory_roles || []).map(r => ` <span class="pill info" title="From a directory group">${esc(r)} · directory</span>`).join("")}</td>
       <td>${isCoord ? `<button class="danger" data-rm="${esc(m.username)}">Remove</button>` : ""}</td></tr>`).join("")}</table>
     ${isCoord ? `<div class="row" style="margin-top:10px"><input id="m-user" placeholder="username"><select id="m-role">${["contracts_manager","legal_reviewer","contracts_approver","commercial_manager","qaqc_manager","hse_manager","construction_manager","project_controls","procurement_manager","auditor","registry_manager","project_coordinator"].map(r => `<option>${r}</option>`).join("")}</select><button class="primary" id="m-add">Add to project</button></div>` : ""}</div>
+  ${d.payments ? `<div class="card"><div class="row"><h2>Payments</h2><span class="spacer"></span><a class="small" id="dash-pay">Open →</a></div>
+    <p>${d.payments.measurements_to_verify} measurement(s) to verify · ${d.payments.awaiting_approval} advice(s) awaiting approval (<b class="mono">${inr(d.payments.awaiting_approval_amount)}</b>) · with accounts <b class="mono">${inr(d.payments.with_accounts_amount)}</b>${d.payments.overdue.length ? ` · ${pill(d.payments.overdue.length + " OVERDUE", "bad")}` : ""}</p>
+    ${d.payments.positions.length ? `<table><tr><th>Subcontract</th><th class="r">Certified</th><th class="r">Paid</th><th class="r">Retention held</th></tr>${d.payments.positions.map(x => `<tr><td class="mono">${esc(x.subcontract_number)}</td><td class="mono r">${inr(x.work_certified)} <span class="small muted">${x.certified_percent_of_value}%</span></td><td class="mono r">${inr(x.paid)}</td><td class="mono r">${inr(x.retention_held)}</td></tr>`).join("")}</table>` : ""}</div>` : ""}
   ${d.mobilisation ? `<div class="card"><div class="row"><h2>Mobilisation &amp; enablers</h2><span class="spacer"></span><a class="small" id="dash-mob">Open →</a></div>
     <div class="row">${d.mobilisation.subcontracts.map(m => `<span class="small"><b class="mono">${esc(m.subcontract_number)}</b> ${m.status === "ACTIVE" ? pill("WORKING", "ok") : pill(`MOBILISING ${m.percent}%`, m.gate_passed ? "ok" : "warn")}</span>`).join(" ")}</div>
     ${d.mobilisation.enabler_flags.length ? `<table><tr><th>Enabler</th><th>Needed by</th><th>Lateness</th></tr>${d.mobilisation.enabler_flags.map(f => `<tr class="click" data-dmob="${f.enabler_id}"><td><span class="mono">${esc(f.number)}</span> ${esc(f.name)}</td><td class="small"><span class="mono">${esc(f.subcontract_number)}</span> ${esc(f.need_by)}</td><td>${flagPill(f.state, f.late_days)}</td></tr>`).join("")}</table>` : ""}</div>` : ""}
@@ -273,6 +276,7 @@ VIEWS.dashboard = async () => {
     document.querySelectorAll("[data-ob]").forEach(r => r.onclick = () => go("obligations", { sub: r.dataset.sub, ob: r.dataset.ob }));
     $("#dash-var") && ($("#dash-var").onclick = () => go("variations"));
     $("#dash-mob") && ($("#dash-mob").onclick = () => go("mobilisation"));
+    $("#dash-pay") && ($("#dash-pay").onclick = () => go("payments"));
     document.querySelectorAll("[data-dmob]").forEach(r => r.onclick = () => go("mobilisation", { mtab: "enablers", en: r.dataset.dmob }));
     document.querySelectorAll("[data-dvar]").forEach(r => r.onclick = () => go("variations", { vo: r.dataset.dvar, vsub: null }));
                document.querySelectorAll("[data-sub-open]").forEach(r => r.onclick = () => go("subcontracts", { sub: r.dataset.subOpen })); })}`;
@@ -437,6 +441,159 @@ async function traceView(oid, p) {
       ${e.review_status === "SUBMITTED" ? `<div class="row"><button data-evr="${e.id}" data-d="ACCEPT">Accept &amp; close</button><button class="danger" data-evr="${e.id}" data-d="REJECT">Reject</button></div>` : ""}</div>`).join("") : `<p class="muted small">No evidence yet.</p>`}
     ${o.status !== "CLOSED" ? `<div class="row small" style="margin-top:8px"><select id="ev-rev">${revs.map(r => `<option value="${r.id}">${esc(r.label)}</option>`).join("")}</select><input id="ev-note" placeholder="note"><button class="primary" id="ev-go">Submit evidence</button></div>` : ""}`));
   return `<div class="card"><h2>Chain of evidence</h2><div class="chain">${parts.join(`<div class="arrow"></div>`)}</div></div>`;
+}
+
+// ---------------------------------------------------------------- measurement & payments (ADR-0010)
+const PA_CLS = { DRAFT: "", SUBMITTED: "warn", APPROVED: "info", PART_PAID: "warn", PAID: "ok", CANCELLED: "" };
+const PA_LABEL = { APPROVED: "WITH ACCOUNTS", PART_PAID: "PART PAID" };
+const paPill = (a) => pill(PA_LABEL[a.status] || a.status, PA_CLS[a.status]) + (a.overdue ? " " + pill("OVERDUE", "bad") : "");
+const myRoles = () => S.me.projects[S.project] || [];
+
+VIEWS.payments = async () => {
+  const p = await api(`/api/v1/projects/${S.project}`);
+  const live = p.subcontracts.filter(s => ["EXECUTED", "ACTIVE"].includes(s.status));
+  const queueTab = myRoles().some(r => ["accounts", "finance_approver", "contracts_approver", "commercial_manager"].includes(r));
+  if (!S.ptab || (S.ptab !== "queue" && !live.find(s => s.id === S.ptab))) S.ptab = myRoles().includes("accounts") ? "queue" : live[0]?.id;
+  const tabs = `<div class="tabs">${live.map(s => `<a data-ptab="${s.id}" class="${s.id === S.ptab ? "on" : ""}">${esc(s.subcontract_number)}</a>`).join("")}
+    ${queueTab ? `<a data-ptab="queue" class="${S.ptab === "queue" ? "on" : ""}">Accounts queue</a>` : ""}</div>`;
+  const body = S.ptab === "queue" ? await accountsQueue() : S.ptab ? await subcontractPayments(S.ptab) : `<p class="muted">No executed subcontracts.</p>`;
+  return `<h1>Measurement &amp; payments</h1><p class="sub">Verified measurement → payment advice prepared by commercial → approved by an approver → sent to accounts. Accounts pays outside the system and uploads the receipt. Every figure is recalculated from its inputs.</p>
+  ${tabs}${body}${on(() => { document.querySelectorAll("[data-ptab]").forEach(a => a.onclick = () => { S.ptab = a.dataset.ptab; S.pa = null; render(); }); bindPay(); })}`;
+};
+
+let bindPay = () => {};
+async function accountsQueue() {
+  const q = await api(`/api/v1/payment-advices`);
+  bindPay = () => {
+    document.querySelectorAll("[data-qpa]").forEach(r => r.onclick = (e) => { if (e.target.closest("button,a")) return; S.ptab = r.dataset.sub; S.pa = r.dataset.qpa; render(); });
+    document.querySelectorAll("[data-qpay]").forEach(b => b.onclick = () => recordPaymentModal(q.advices.find(a => a.id === b.dataset.qpay)));
+  };
+  return `<div class="card"><div class="row"><h2>With accounts — to be paid</h2><span class="spacer"></span><span class="small">Balance to pay <b class="mono">${inr(q.total_balance)}</b></span></div>
+    ${q.advices.length ? `<table><tr><th>Advice</th><th>Subcontract</th><th class="r">Net payable</th><th class="r">Paid</th><th class="r">Balance</th><th>Pay by</th><th>Status</th><th></th></tr>
+    ${q.advices.map(a => `<tr class="click" data-qpa="${a.id}" data-sub="${a.subcontract_id}"><td class="mono">${esc(a.number)}</td><td class="mono">${esc(a.subcontract_number)}</td>
+      <td class="mono r">${inr(a.net_payable)}</td><td class="mono r">${inr(a.paid_amount)}</td><td class="mono r"><b>${inr(a.balance)}</b></td>
+      <td class="mono small ${a.overdue ? "bad-text" : ""}">${esc(a.due_date || "")}</td><td>${paPill(a)}</td>
+      <td class="row" style="flex-wrap:nowrap"><a class="small" href="/api/v1/payment-advices/${a.id}/print" target="_blank">Print</a>${a.actions.includes("record_payment") ? `<button class="primary" data-qpay="${a.id}">Record payment</button>` : ""}</td></tr>`).join("")}</table>`
+      : `<p class="muted">Nothing waiting for payment.</p>`}
+    <p class="small muted">Pay through the bank as usual, then record the payment here with the bank's receipt (PDF, PNG or JPG). Part payments are allowed; the advice stays with accounts until fully paid.</p></div>`;
+}
+
+function recordPaymentModal(a) {
+  openModal(`<h2>Record payment · ${esc(a.number)}</h2><p class="small muted">${esc(a.subcontract_number)} · balance <b class="mono">${inr(a.balance)}</b></p><div class="form">
+    <label>Amount paid</label><input id="rp-amt" inputmode="decimal" value="${esc(a.balance)}">
+    <label>Paid on</label><input id="rp-date" type="date" value="${new Date().toISOString().slice(0, 10)}">
+    <label>Mode</label><select id="rp-mode">${["NEFT", "RTGS", "IMPS", "CHEQUE", "OTHER"].map(m => `<option>${m}</option>`).join("")}</select>
+    <label>Bank / UTR / cheque reference</label><input id="rp-ref">
+    <label>Receipt (PDF, PNG or JPG)</label><input id="rp-file" type="file" accept=".pdf,.png,.jpg,.jpeg,.txt">
+    <label>Note</label><input id="rp-note"></div><button class="primary" id="rp-go">Record payment</button>`);
+  $("#rp-go").onclick = async () => {
+    const f = $("#rp-file").files[0]; if (!f) return toast("Attach the receipt", true);
+    const fd = new FormData(); fd.append("receipt", f); fd.append("amount", $("#rp-amt").value); fd.append("paid_on", $("#rp-date").value);
+    fd.append("mode", $("#rp-mode").value); fd.append("payment_reference", $("#rp-ref").value); fd.append("note", $("#rp-note").value);
+    try { const r = await api(`/api/v1/payment-advices/${a.id}/payments`, { method: "POST", body: fd }); closeModal();
+      toast(r.status === "PAID" ? `${a.number} fully paid` : `Part payment recorded — balance ${inr(r.balance)}`); render(); } catch (e) {}
+  };
+}
+
+async function subcontractPayments(sid) {
+  const [o, docs] = await Promise.all([api(`/api/v1/subcontracts/${sid}/payments`), api(`/api/v1/projects/${S.project}/documents`)]);
+  const pos = o.position, t = o.terms;
+  const revs = docs.flatMap(d => d.revisions.map(x => ({ id: x.id, label: `${d.document_number} rev ${x.revision} — ${d.title}` })));
+  const revSel = (id, blank) => `<select id="${id}">${blank ? `<option value="">(none)</option>` : ""}${revs.map(x => `<option value="${x.id}">${esc(x.label)}</option>`).join("")}</select>`;
+  const detail = S.pa && o.advices.find(a => a.id === S.pa) ? await adviceDetail(S.pa) : null;
+  bindPay = () => {
+    document.querySelectorAll("[data-pa]").forEach(r => r.onclick = () => { S.pa = r.dataset.pa; render(); });
+    document.querySelectorAll("[data-mv]").forEach(b => b.onclick = async () => { let comment = ""; if (b.dataset.d === "RETURN") { comment = prompt("What is wrong with the measurement?"); if (!comment) return; }
+      try { await api(`/api/v1/measurements/${b.dataset.mv}/verify`, { method: "POST", json: { decision: b.dataset.d, comment } }); toast(b.dataset.d === "VERIFY" ? "Measurement verified" : "Measurement returned"); render(); } catch (e) {} });
+    $("#pt-edit") && ($("#pt-edit").onclick = () => {
+      const v = (k, d) => esc(t?.[k] ?? d);
+      openModal(`<h2>Payment terms · ${esc(o.subcontract_number)}</h2><p class="small muted">Take these from the executed subcontract. Advices already prepared keep the terms they were calculated with.</p><div class="form">
+        <label>Retention %</label><input id="pt-ret" value="${v("retention_percent", "5")}"><label>Retention cap (% of current value; blank = no cap)</label><input id="pt-cap" value="${v("retention_cap_percent", "")}">
+        <label>Advance amount</label><input id="pt-adv" value="${v("advance_amount", "0")}"><label>Advance recovery % of each bill</label><input id="pt-rec" value="${v("advance_recovery_percent", "0")}">
+        <label>GST %</label><input id="pt-gst" value="${v("gst_percent", "18")}"><label>TDS %</label><input id="pt-tds" value="${v("tds_percent", "2")}">
+        <label>Pay within (days of approval)</label><input id="pt-days" type="number" value="${v("payment_due_days", 30)}">
+        <label>Contract reference</label><input id="pt-src" value="${v("source_reference", "")}" placeholder="e.g. cl. 14 and Schedule 3">
+        ${pos.net_approved !== "0.00" ? `<label>Reason for change (payments already approved)</label><input id="pt-why">` : ""}</div><button class="primary" id="pt-go">Save terms</button>`);
+      $("#pt-go").onclick = async () => { try { await api(`/api/v1/subcontracts/${sid}/payment-terms`, { method: "PUT", json: { retention_percent: $("#pt-ret").value, retention_cap_percent: $("#pt-cap").value || null,
+        advance_amount: $("#pt-adv").value, advance_recovery_percent: $("#pt-rec").value, gst_percent: $("#pt-gst").value, tds_percent: $("#pt-tds").value,
+        payment_due_days: Number($("#pt-days").value), source_reference: $("#pt-src").value, reason: $("#pt-why")?.value || "" } }); closeModal(); toast("Payment terms saved"); render(); } catch (e) {} };
+    });
+    $("#mb-new") && ($("#mb-new").onclick = () => {
+      const row = () => `<tr><td><input data-f="boq_ref" style="width:70px"></td><td><input data-f="description"></td><td><input data-f="unit" style="width:70px"></td><td><input data-f="quantity" style="width:90px"></td><td><input data-f="rate" style="width:100px"></td></tr>`;
+      openModal(`<h2>New measurement</h2><div class="form"><label>Period from</label><input id="mb-from" type="date"><label>Period to</label><input id="mb-to" type="date" value="${new Date().toISOString().slice(0, 10)}">
+        <label>Signed measurement sheet / RA bill</label>${revSel("mb-doc")}</div>
+        <table class="items"><thead><tr><th>BOQ</th><th>Description</th><th>Unit</th><th>Qty</th><th>Rate</th></tr></thead><tbody id="mb-body">${row()}${row()}</tbody></table>
+        <div class="row"><button id="mb-add">+ Line</button><span class="spacer"></span><button class="primary" id="mb-go">Submit for verification</button></div>`);
+      $("#mb-add").onclick = () => $("#mb-body").insertAdjacentHTML("beforeend", row());
+      $("#mb-go").onclick = async () => { const lines = [...document.querySelectorAll("#mb-body tr")].map(r => Object.fromEntries([...r.querySelectorAll("[data-f]")].map(i => [i.dataset.f, i.value]))).filter(l => l.description);
+        try { await api(`/api/v1/subcontracts/${sid}/measurements`, { method: "POST", json: { period_from: $("#mb-from").value, period_to: $("#mb-to").value, evidence_revision_id: $("#mb-doc").value, lines } }); closeModal(); toast("Measurement submitted for verification"); render(); } catch (e) {} };
+    });
+    $("#pa-new") && ($("#pa-new").onclick = () => {
+      const ded = () => `<tr><td><select data-f="kind">${o.deduction_kinds.map(k => `<option>${k}</option>`).join("")}</select></td><td><input data-f="description"></td><td><input data-f="amount" style="width:110px"></td><td>${revSel("", true).replace('<select id="">', '<select data-f="evidence_revision_id">')}</td></tr>`;
+      openModal(`<h2>New payment advice</h2>
+        <h3>Verified measurements</h3>${o.payable.measurements.length ? o.payable.measurements.map(m => `<label class="small" style="display:flex;gap:8px"><input type="checkbox" data-pm="${m.id}" style="width:auto" checked> <span class="mono">${esc(m.number)}</span> ${esc(m.period_from)} – ${esc(m.period_to)} · <b class="mono">${inr(m.total)}</b></label>`).join("") : `<p class="small muted">None waiting.</p>`}
+        <h3>Incorporated variations</h3>${o.payable.variations.length ? o.payable.variations.map(v => `<label class="small" style="display:flex;gap:8px"><input type="checkbox" data-pv="${v.id}" style="width:auto"> <span class="mono">${esc(v.number)}</span> ${esc(v.title)} · <b class="mono">${inr(v.approved_amount)}</b></label>`).join("") : `<p class="small muted">None waiting.</p>`}
+        <div class="form"><label>Advance with this advice (available ${inr(o.payable.advance_available)})</label><input id="pa-adv" value="0"></div>
+        <h3>Deductions</h3><table class="items"><thead><tr><th>Kind</th><th>Description</th><th>Amount</th><th>Supporting document</th></tr></thead><tbody id="pa-ded"></tbody></table><button id="pa-dadd">+ Deduction</button>
+        <div class="row" style="margin-top:12px"><span class="small muted">The system calculates retention, advance recovery, GST and TDS from the payment terms.</span><span class="spacer"></span><button class="primary" id="pa-go">Prepare advice</button></div>`);
+      $("#pa-dadd").onclick = () => $("#pa-ded").insertAdjacentHTML("beforeend", ded());
+      $("#pa-go").onclick = async () => {
+        const deductions = [...document.querySelectorAll("#pa-ded tr")].map(r => Object.fromEntries([...r.querySelectorAll("[data-f]")].map(i => [i.dataset.f, i.value || null]))).filter(d => d.description);
+        try { const a = await api(`/api/v1/subcontracts/${sid}/payment-advices`, { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, json: {
+          measurement_ids: [...document.querySelectorAll("[data-pm]:checked")].map(x => x.dataset.pm), variation_ids: [...document.querySelectorAll("[data-pv]:checked")].map(x => x.dataset.pv),
+          advance_amount: $("#pa-adv").value || "0", deductions } }); closeModal(); S.pa = a.id; toast(`${a.number} prepared — net ${inr(a.net_payable)}`); render(); } catch (e) {} };
+    });
+    if (detail) detail.bind();
+  };
+  const k = (v, l, cls = "") => `<div class="kpi ${cls}"><div class="v money">${v}</div><div class="l">${l}</div></div>`;
+  return `<div class="grid g5">
+      ${k(inr(pos.work_certified), `Work certified (${pos.certified_percent_of_value}% of value)`)}
+      ${k(inr(pos.paid), "Paid (net, with receipts)")}
+      ${k(inr(pos.with_accounts), "With accounts, not yet paid", Number(pos.with_accounts) ? "warn" : "")}
+      ${k(inr(pos.retention_held), "Retention held")}
+      ${k(inr(Number(pos.advance_paid) - Number(pos.advance_recovered)), "Advance outstanding")}</div><br>
+  <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1.15fr)"><div>
+    <div class="card"><div class="row"><h2>Payment terms</h2><span class="spacer"></span>${o.can.terms ? `<button id="pt-edit">${t ? "Change" : "Set terms"}</button>` : ""}</div>
+      ${t ? `<p class="small">Retention <b>${Number(t.retention_percent)}%</b>${t.retention_cap_percent ? ` (cap ${Number(t.retention_cap_percent)}% of value)` : ""} · advance <b class="mono">${inr(t.advance_amount)}</b> recovered at <b>${Number(t.advance_recovery_percent)}%</b> · GST <b>${Number(t.gst_percent)}%</b> · TDS <b>${Number(t.tds_percent)}%</b> · pay within <b>${t.payment_due_days}</b> days</p>
+        <p class="small muted">${esc(t.source_reference)} · version ${t.version} by ${esc(t.set_by)}</p>` : `<p class="notice risk small">No payment terms yet — set them from the executed subcontract before preparing an advice.</p>`}</div>
+    <div class="card"><div class="row"><h2>Measurements</h2><span class="spacer"></span>${o.can.measure ? `<button id="mb-new">+ Measurement</button>` : ""}</div>
+      ${o.measurements.length ? `<table><tr><th>MB</th><th>Period</th><th class="r">Value</th><th>Status</th><th></th></tr>${o.measurements.map(m => `<tr><td class="mono">${esc(m.number)}<div class="small muted">${esc(m.evidence?.document_number || "")}</div></td>
+        <td class="small mono">${esc(m.period_from)}<br>${esc(m.period_to)}</td><td class="mono r">${inr(m.total)}<div class="small muted">${m.lines.length} line(s)</div></td>
+        <td>${pill(m.status, { VERIFIED: "ok", SUBMITTED: "warn", RETURNED: "bad" }[m.status])}${m.advised ? " " + pill("ADVISED", "info") : ""}<div class="small muted">${esc(m.verified_by || m.prepared_by)}</div></td>
+        <td class="row" style="flex-wrap:nowrap">${m.can_verify ? `<button class="primary" data-mv="${m.id}" data-d="VERIFY">Verify</button><button data-mv="${m.id}" data-d="RETURN">Return</button>` : ""}</td></tr>`).join("")}</table>` : `<p class="muted small">No measurements yet.</p>`}</div>
+    <div class="card"><div class="row"><h2>Payment advices</h2><span class="spacer"></span>${o.can.prepare ? `<button class="primary" id="pa-new">+ Payment advice</button>` : ""}</div>
+      ${o.advices.length ? `<table><tr><th>Advice · period</th><th class="r">Net payable</th><th>Status</th></tr>${o.advices.map(a => `<tr class="click" data-pa="${a.id}" style="${a.id === S.pa ? "background:#f2f9f9" : ""}"><td class="mono">${esc(a.number)}<div class="small muted">${esc(a.period_from || "")}${a.period_to ? " – " + esc(a.period_to) : ""}</div></td>
+        <td class="mono r"><b>${inr(a.net_payable)}</b><div class="small muted">gross ${inr(a.gross_amount)}${a.balance && a.balance !== "0.00" ? ` · due ${inr(a.balance)}` : ""}</div></td><td>${paPill(a)}</td></tr>`).join("")}</table>` : `<p class="muted small">No payment advices yet.</p>`}</div>
+  </div><div>${detail ? detail.html : `<div class="card"><p class="muted">Select a payment advice to see its lines, calculation, approval and payments.</p></div>`}</div></div>`;
+}
+
+async function adviceDetail(aid) {
+  const a = await api(`/api/v1/payment-advices/${aid}`);
+  const A = new Set(a.actions);
+  const html = `<div class="card"><div class="row"><h2>${esc(a.number)} · ${esc(a.subcontract_number)}</h2><span class="spacer"></span>${paPill(a)}</div>
+    <p class="small muted">Prepared by ${esc(a.prepared_by)}${a.approved_by ? ` · approved by <b>${esc(a.approved_by)}</b> ${esc((a.approved_at || "").slice(0, 10))} · pay by ${esc(a.due_date)}` : ""}${a.decision_comment ? ` — “${esc(a.decision_comment)}”` : ""}</p>
+    <div class="row">${A.has("submit") ? `<button class="primary" data-pd="SUBMIT">Submit for approval</button>` : ""}${A.has("approve") ? `<button class="primary" data-pd="APPROVE">Approve → send to accounts</button><button data-pd="RETURN">Return</button>` : ""}
+      ${A.has("cancel") ? `<button class="danger" data-pd="CANCEL">Cancel</button>` : ""}${A.has("record_payment") ? `<button class="primary" id="pd-pay">Record payment</button>` : ""}
+      <span class="spacer"></span>${["APPROVED", "PART_PAID", "PAID"].includes(a.status) ? `<a class="small" href="/api/v1/payment-advices/${a.id}/print" target="_blank">Printable advice</a>` : ""}<button id="pd-recalc">Recalculate</button><button id="pd-trace">Chain of evidence</button></div>
+    <div class="vsec"><h3>What it pays for</h3><table>${a.lines.map(l => `<tr><td>${pill(l.source_type, l.source_type === "DEDUCTION" ? "bad" : "")}</td><td class="small">${esc(l.description)}${l.evidence ? `<div class="muted mono">${esc(l.evidence.document_number)} rev ${esc(l.evidence.revision)}</div>` : ""}</td><td class="mono r">${l.source_type === "DEDUCTION" ? "−" : ""}${inr(l.amount)}</td></tr>`).join("")}</table></div>
+    <div class="vsec"><h3>Calculation</h3><table>${a.calculation.steps.map(st => `<tr class="${st.label === "Net payable" ? "tot" : ""}"><td>${st.label === "Net payable" ? `<b>${esc(st.label)}</b>` : esc(st.label)}<div class="small muted">${esc(st.formula)}</div></td><td class="mono r">${st.label === "Net payable" ? `<b>${inr(st.amount)}</b>` : inr(st.amount)}</td></tr>`).join("")}</table>
+      <p class="small muted">Terms version ${a.terms.version} (${esc(a.terms.source_reference)}). To-date figures frozen at preparation: retention held ${inr(a.calculation.to_date.retention_held)}, advance advised ${inr(a.calculation.to_date.advance_advised)}, recovered ${inr(a.calculation.to_date.advance_recovered)}.</p></div>
+    <div class="vsec"><h3>Payments by accounts</h3>${a.payments.length ? `<table>${a.payments.map(p => `<tr><td class="mono small">${esc(p.paid_on)}</td><td class="small">${esc(p.mode)} <span class="mono">${esc(p.reference)}</span><div class="muted">receipt ${esc(p.receipt.document_number)} · ${esc(p.recorded_by)}</div></td><td class="mono r">${inr(p.amount)}</td></tr>`).join("")}</table>` : `<p class="small muted">${["APPROVED", "PART_PAID"].includes(a.status) ? "With accounts — no payment recorded yet." : "Not yet sent to accounts."}</p>`}
+      ${a.balance ? `<p class="small">Paid <b class="mono">${inr(a.paid_amount)}</b> of <b class="mono">${inr(a.net_payable)}</b> · balance <b class="mono">${inr(a.balance)}</b></p>` : ""}</div>
+    <div class="vsec"><h3>History</h3><table>${a.history.map(h => `<tr><td class="mono small" style="white-space:nowrap">${esc(h.at.replace("T", " ").slice(0, 16))}</td><td class="small">${esc(h.actor)}</td><td class="mono small">${esc(h.action.replace("payment.", ""))}</td><td class="small muted">${esc(h.reason || "")}</td></tr>`).join("")}</table></div></div>`;
+  const bind = () => {
+    document.querySelectorAll("[data-pd]").forEach(b => b.onclick = async () => { const act = b.dataset.pd; let comment = "";
+      if (act === "RETURN" || act === "CANCEL") { comment = prompt(act === "RETURN" ? "What needs correcting?" : "Reason for cancelling"); if (!comment) return; }
+      if (act === "APPROVE" && !confirm(`Approve ${a.number} for ${inr(a.net_payable)} and send it to accounts?`)) return;
+      try { await api(`/api/v1/payment-advices/${aid}/decision`, { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, json: { action: act, comment } });
+        toast({ SUBMIT: "Submitted for approval", APPROVE: "Approved — sent to accounts", RETURN: "Returned to commercial", CANCEL: "Cancelled" }[act]); render(); } catch (e) {} });
+    $("#pd-pay") && ($("#pd-pay").onclick = () => recordPaymentModal(a));
+    $("#pd-recalc").onclick = async () => { const r = await api(`/api/v1/payment-advices/${aid}/recalculate`); toast(r.reconciles ? `Recalculated: net ${inr(r.recomputed.net_payable)} — matches the stored figures` : `Does NOT reconcile: ${Object.keys(r.differences).join(", ")}`, !r.reconciles); };
+    $("#pd-trace").onclick = async () => { const t = await api(`/api/v1/payment-advices/${aid}/trace`);
+      openModal(`<h2>Chain of evidence · ${esc(a.number)}</h2><div class="chain">${t.edges.map(e => { const f = t.nodes.find(x => x.id === e.from), to = t.nodes.find(x => x.id === e.to);
+        return `<div class="link"><div class="k">${esc(e.type.replaceAll("_", " "))}</div>${esc(f.kind)}: ${esc(f.label)} → ${esc(to.kind)}: ${esc(to.label)}</div>`; }).join("")}</div>`); };
+  };
+  return { html, bind };
 }
 
 // ---------------------------------------------------------------- mobilisation & enablers (ADR-0009)

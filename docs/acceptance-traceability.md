@@ -66,5 +66,9 @@
 | MOB-01 | Checklist generated at execution with discipline pack; start of work blocked until mandatory items close | `test_checklist_generated_*`, `test_start_work_gate_*` | ✅ |
 | MOB-02 | Enablers: readiness claimed with evidence and verified by another person; prerequisites; lateness against need-by; site item waits for its enabler | `test_enabler_readiness_rules`, `test_lateness_*`, `test_site_item_waits_*` | ✅ |
 | MOB-03 | Late enabler → dated delay event → variation, traceable; project-scoped access | `test_delay_event_*`, `test_access_is_project_scoped` | ✅ |
-| PAY-01 | Payments | — | Deferred |
+| PAY-01 | Certificate recalculates from its approved inputs (terms snapshot, lines, frozen to-date figures); tampered figures detected and cannot be approved; retention cap and recovery limits | `test_PAY01_*` (2), `test_retention_cap_and_advance_recovery_limits` | ✅ |
+| PAY-02 | Same idempotency key creates one payment advice; same key with a different payload refused | `test_PAY02_same_idempotency_key_creates_one_advice` | ✅ |
+| PAY-03 | Preparer cannot approve; preparer/approver cannot record the payment | `test_PAY03_*` | ✅ |
+| PAY-04 | Measurement verified by a second person; only verified measurements and incorporated variations paid, once; deductions need evidence | `test_measurement_rules`, `test_nothing_is_paid_twice_*`, `test_deductions_*`, `test_return_goes_back_to_draft` | ✅ |
+| PAY-05 | Accounts pays outside the system and uploads the receipt: part payment, no overpayment, date and reference rules, receipt stored as a document; print, trace, access | `test_accounts_records_payment_with_receipt`, `test_print_trace_access_and_terms_required` | ✅ |
 | REC-01 | Restore drill | — | Requires the pilot environment |

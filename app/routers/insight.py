@@ -62,6 +62,7 @@ def dashboard(pid: str, user: User = Depends(current_user), db: Session = Depend
                       "pending_assertions": len(pending_assert)},
         "variations": _variation_kpis(db, pid, subs),
         "mobilisation": _mobilisation_kpis(db, pid, subs),
+        "payments": _payment_kpis(db, pid, subs),
         "overdue_obligations": [o for o in obs if o["overdue"]],
         "upcoming_obligations": upcoming,
     }
@@ -117,3 +118,26 @@ def _mobilisation_kpis(db, pid, subs):
                               "subcontract_number": sub.subcontract_number if sub else "?", **v})
     flags.sort(key=lambda f: -f["late_days"])
     return {"subcontracts": mob, "enabler_flags": flags}
+
+
+def _payment_kpis(db, pid, subs):
+    from decimal import Decimal
+
+    from app.models import Measurement, PaymentAdvice
+    from app.services import payments as P
+    advs = list(db.scalars(select(PaymentAdvice).where(PaymentAdvice.project_id == pid)))
+    today = date.today().isoformat()
+    with_acc = [a for a in advs if a.status in ("APPROVED", "PART_PAID")]
+    month = today[:7]
+    return {"awaiting_approval": sum(a.status == "SUBMITTED" for a in advs),
+            "awaiting_approval_amount": str(sum((a.net_payable for a in advs if a.status == "SUBMITTED"), Decimal("0.00"))),
+            "with_accounts": len(with_acc),
+            "with_accounts_amount": str(sum((a.net_payable - a.paid_amount for a in with_acc), Decimal("0.00"))),
+            "overdue": [{"id": a.id, "number": a.advice_number, "due_date": a.due_date,
+                         "subcontract_number": next((s.subcontract_number for s in subs if s.id == a.subcontract_id), "?"),
+                         "balance": str(a.net_payable - a.paid_amount)} for a in with_acc if a.due_date and a.due_date < today],
+            "measurements_to_verify": sum(1 for s in subs for m in db.scalars(select(Measurement).where(
+                Measurement.subcontract_id == s.id, Measurement.status == "SUBMITTED"))),
+            "positions": [{"subcontract_number": s.subcontract_number, **P.position(db, s)}
+                          for s in subs if s.status in ("EXECUTED", "ACTIVE")],
+            "month": month}
